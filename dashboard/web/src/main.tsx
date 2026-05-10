@@ -169,10 +169,10 @@ function App() {
     setBusy(true);
     try {
       const [accountsData, jobsData, mailboxesData, runningJobsData] = await Promise.all([
-        api<Account[]>(`/api/accounts?limit=200${accountStatus ? `&status=${accountStatus}` : ''}`),
-        api<Job[]>(`/api/jobs?limit=200${jobStatus ? `&status=${jobStatus}` : ''}`),
-        api<Mailbox[]>(`/api/mailboxes?limit=200${mailboxStatus ? `&status=${mailboxStatus}` : ''}`),
-        api<Job[]>('/api/jobs?limit=200&status=RUNNING')
+        api<Account[]>(`/api/accounts?limit=500${accountStatus ? `&status=${accountStatus}` : ''}`),
+        api<Job[]>(`/api/jobs?limit=500${jobStatus ? `&status=${jobStatus}` : ''}`),
+        api<Mailbox[]>(`/api/mailboxes?limit=500${mailboxStatus ? `&status=${mailboxStatus}` : ''}`),
+        api<Job[]>('/api/jobs?limit=500&status=RUNNING')
       ]);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
       setJobs(Array.isArray(jobsData) ? jobsData : []);
@@ -487,7 +487,7 @@ function App() {
                 <PanelHeader title="最近工作流" icon={<Activity size={16} />}>
                   <button className="secondaryButton" onClick={() => openView('jobs')}>查看全部</button>
                 </PanelHeader>
-                <JobTable jobs={jobs.slice(0, 8)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
+                <JobTable jobs={jobs.slice(0, 20)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
               </div>
             </section>
           )}
@@ -531,7 +531,7 @@ function App() {
                         <ListChecks size={14} /> 全部工作流
                       </button>
                     </div>
-                    <JobTable jobs={mailboxOAuthJobs.slice(0, 10)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
+                    <JobTable jobs={mailboxOAuthJobs.slice(0, 50)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
                   </>
                 )}
 	              </div>
@@ -580,7 +580,7 @@ function App() {
 	                      <ListChecks size={14} /> 全部工作流
 	                    </button>
 	                  </div>
-	                  <JobTable jobs={mailboxRegisterJobs.slice(0, 20)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
+	                  <JobTable jobs={mailboxRegisterJobs.slice(0, 100)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
 	                </div>
 	              </div>
 	            </section>
