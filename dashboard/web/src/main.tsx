@@ -16,6 +16,7 @@ import {
   Save,
   Search,
   ShieldCheck,
+  MessageSquare,
   Trash2,
   X,
   Zap
@@ -81,7 +82,7 @@ type Step = {
 };
 
 type Toast = { kind: 'ok' | 'error'; text: string } | null;
-type ViewKey = 'accounts' | 'mailboxes' | 'mailboxRegistration' | 'jobs';
+type ViewKey = 'accounts' | 'mailboxes' | 'mailboxRegistration' | 'otp' | 'jobs';
 
 const statusOptions = ['', 'CREATED', 'REGISTERED', 'ACTIVATED', 'EMAIL_ALREADY_EXISTS', 'REGISTER_FAILED', 'PAYMENT_FAILED'];
 const jobStatusOptions = ['', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_RECOVERABLE', 'FAILED_FINAL'];
@@ -102,9 +103,17 @@ function App() {
   const [toast, setToast] = useState<Toast>(null);
   const [showSecrets, setShowSecrets] = useState(false);
   const [mailboxRegistering, setMailboxRegistering] = useState(false);
+  const [mailboxRegisterCount, setMailboxRegisterCount] = useState(1);
+  const [mailboxRegisterProgress, setMailboxRegisterProgress] = useState<{running: boolean; total: number; done: number; remaining: number; continuous: boolean}>({running: false, total: 0, done: 0, remaining: 0, continuous: false});
   const [mailboxOAuthing, setMailboxOAuthing] = useState('');
   const [runningAccountIds, setRunningAccountIds] = useState<Set<string>>(new Set());
   const [runningJobCount, setRunningJobCount] = useState(0);
+  const [otpEmail, setOtpEmail] = useState('');
+  const [otpKeyword, setOtpKeyword] = useState('');
+  const [otpTimeout, setOtpTimeout] = useState(120);
+  const [otpResult, setOtpResult] = useState<{found: boolean; code: string; time: string} | null>(null);
+  const [otpWaiting, setOtpWaiting] = useState(false);
+  const [otpHistory, setOtpHistory] = useState<{email: string; keyword: string; code: string; found: boolean; time: string}[]>([]);
 
   async function refresh() {
     setBusy(true);
@@ -122,6 +131,11 @@ function App() {
       const runningJobs = Array.isArray(runningJobsData) ? runningJobsData : [];
       setRunningJobCount(runningJobs.length);
       setRunningAccountIds(new Set(runningJobs.filter((job) => job.account_id).map((job) => job.account_id)));
+      try {
+        const prog = await api<{running: boolean; total: number; done: number; remaining: number; continuous: boolean}>('/api/mailboxes/register');
+        setMailboxRegisterProgress(prog);
+        setMailboxRegistering(prog.running);
+      } catch {}
       if (selectedJob) {
         setSelectedJob(await api<Job>(`/api/jobs/${selectedJob.job_id}`));
       }
@@ -203,16 +217,53 @@ function App() {
     }
   }
 
-  async function startMailboxRegistration() {
+  async function waitForOTP() {
+    if (!otpEmail) { setToast({ kind: 'error', text: '请选择或输入邮箱地址' }); return; }
+    setOtpWaiting(true);
+    setOtpResult(null);
+    try {
+      const data = await api<{found: boolean; content_extracted: string}>('/api/mailboxes/wait-otp', {
+        method: 'POST',
+        body: JSON.stringify({ email_address: otpEmail, subject_keyword: otpKeyword, timeout_seconds: otpTimeout }),
+      });
+      const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+      const result = { found: data.found, code: data.content_extracted || '', time: now };
+      setOtpResult(result);
+      setOtpHistory((prev) => [{ email: otpEmail, keyword: otpKeyword, ...result }, ...prev].slice(0, 50));
+      if (data.found) setToast({ kind: 'ok', text: `收到验证码: ${data.content_extracted}` });
+      else setToast({ kind: 'error', text: '超时未收到验证码' });
+    } catch (err: any) {
+      setToast({ kind: 'error', text: `接码失败: ${err.message}` });
+    } finally {
+      setOtpWaiting(false);
+    }
+  }
+
+  async function startMailboxRegistration(continuous = false) {
     setMailboxRegistering(true);
     try {
-      const resp = await api<{ started: boolean }>('/api/mailboxes/register', { method: 'POST', body: '{}' });
-      setToast({ kind: resp.started ? 'ok' : 'error', text: resp.started ? '手动注册邮箱已启动' : '手动注册邮箱未启动' });
+      const resp = await api<{ started: boolean; count?: number; continuous?: boolean }>('/api/mailboxes/register', { method: 'POST', body: JSON.stringify(continuous ? { continuous: true } : { count: mailboxRegisterCount }) });
+      const label = continuous ? '持续注册已启动' : `批量注册已启动 (${resp.count || 1} 个)`;
+      setToast({ kind: resp.started ? 'ok' : 'error', text: resp.started ? label : '注册启动失败' });
       window.setTimeout(refresh, 3000);
     } catch (err) {
       setToast({ kind: 'error', text: errorText(err) });
     } finally {
       setMailboxRegistering(false);
+    }
+  }
+
+  async function cancelMailboxRegistration() {
+    try {
+      const resp = await api<{ cancelled: boolean }>('/api/mailboxes/register', { method: 'POST', body: JSON.stringify({ cancel: true }) });
+      if (resp.cancelled) {
+        setToast({ kind: 'ok', text: '已取消剩余注册任务' });
+        window.setTimeout(refresh, 1000);
+      } else {
+        setToast({ kind: 'error', text: '取消失败：当前没有运行中的批量任务' });
+      }
+    } catch (err) {
+      setToast({ kind: 'error', text: errorText(err) });
     }
   }
 
@@ -260,9 +311,10 @@ function App() {
 
   useEffect(() => {
     refresh();
-    const id = window.setInterval(refresh, 15000);
+    const interval = mailboxRegisterProgress.running ? 5000 : 15000;
+    const id = window.setInterval(refresh, interval);
     return () => window.clearInterval(id);
-  }, [accountStatus, jobStatus, mailboxStatus]);
+  }, [accountStatus, jobStatus, mailboxStatus, mailboxRegisterProgress.running]);
 
   useEffect(() => {
     if (!toast) return;
@@ -329,6 +381,7 @@ function App() {
           <NavItem active={activeView === 'accounts'} icon={<Database size={17} />} label="账号" count={accounts.length} onClick={() => openView('accounts')} />
           <NavItem active={activeView === 'mailboxes'} icon={<Inbox size={17} />} label="邮箱管理" count={mailboxes.filter((m) => m.status === 'AVAILABLE').length} onClick={() => openView('mailboxes')} />
           <NavItem active={activeView === 'mailboxRegistration'} icon={<Play size={17} />} label="邮箱注册" count={runningMailboxRegisterCount} onClick={() => openView('mailboxRegistration')} />
+          <NavItem active={activeView === 'otp'} icon={<MessageSquare size={17} />} label="接码" onClick={() => openView('otp')} />
           <NavItem active={activeView === 'jobs'} icon={<ListChecks size={17} />} label="工作流" count={runningJobCount} onClick={() => openView('jobs')} />
         </nav>
 
@@ -437,14 +490,35 @@ function App() {
 	              <div className="panel mailboxRegisterPanel">
 	                <PanelHeader title="邮箱注册" icon={<Play size={16} />}>
 	                  <div className="headerControls">
-	                    <button className="primaryButton" onClick={startMailboxRegistration} disabled={busy || mailboxRegistering}>
-	                      <Play size={16} /> 启动注册
+	                    <input type="number" min={1} max={1000} value={mailboxRegisterCount} onChange={(e) => setMailboxRegisterCount(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} style={{ width: 56, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
+	                    <button className="primaryButton" onClick={() => startMailboxRegistration(false)} disabled={busy || mailboxRegistering}>
+	                      <Play size={16} /> 启动注册 ({mailboxRegisterCount})
 	                    </button>
+	                    <button className="primaryButton" onClick={() => startMailboxRegistration(true)} disabled={busy || mailboxRegistering} style={{ background: '#6f42c1' }}>
+	                      <RefreshCcw size={16} /> 持续注册
+	                    </button>
+	                    {mailboxRegisterProgress.running && (
+	                      <button className="secondaryButton" onClick={cancelMailboxRegistration} style={{ color: '#d32f2f' }}>
+	                        <X size={16} /> {mailboxRegisterProgress.continuous ? '停止持续注册' : `取消剩余 (${mailboxRegisterProgress.remaining})`}
+	                      </button>
+	                    )}
 	                    <button className="secondaryButton" onClick={() => openView('mailboxes')}>
 	                      <Inbox size={16} /> 邮箱管理
 	                    </button>
 	                  </div>
 	                </PanelHeader>
+	                {mailboxRegisterProgress.running && (
+	                  <div style={{ padding: '8px 16px', background: 'var(--surface-1, #f6f8fa)', borderBottom: '1px solid var(--border, #e1e4e8)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+	                    <strong>{mailboxRegisterProgress.continuous ? '持续注册:' : '批量进度:'}</strong>
+	                    <span>{mailboxRegisterProgress.continuous ? `已完成 ${mailboxRegisterProgress.done}` : `${mailboxRegisterProgress.done} / ${mailboxRegisterProgress.total}`}</span>
+	                    {!mailboxRegisterProgress.continuous && (
+	                      <div style={{ flex: 1, height: 6, background: '#e1e4e8', borderRadius: 3, overflow: 'hidden' }}>
+	                        <div style={{ width: `${mailboxRegisterProgress.total > 0 ? (mailboxRegisterProgress.done / mailboxRegisterProgress.total) * 100 : 0}%`, height: '100%', background: '#2ea44f', borderRadius: 3, transition: 'width 0.3s' }} />
+	                      </div>
+	                    )}
+	                    {!mailboxRegisterProgress.continuous && <span style={{ opacity: 0.7 }}>剩余 {mailboxRegisterProgress.remaining}</span>}
+	                  </div>
+	                )}
 	                <div className="mailboxRegisterBody">
 	                  <MailboxStatusStrip mailboxes={mailboxes} />
 	                  <div className="sectionTitle">
@@ -459,7 +533,97 @@ function App() {
 	            </section>
 	          )}
 
-	          {activeView === 'jobs' && (
+	          {activeView === 'otp' && (
+            <section className="workspace otpWorkspace">
+              <div className="panel otpPanel">
+                <PanelHeader title="邮箱接码" icon={<MessageSquare size={16} />} />
+                <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                    <input type="text" list="otpEmailList" value={otpEmail} onChange={(e) => setOtpEmail(e.target.value)} placeholder="输入或选择邮箱..." style={{ flex: 1, minWidth: 200 }} />
+                    <datalist id="otpEmailList">
+                      {mailboxes.filter((m) => m.refresh_token).map((m) => (
+                        <option key={m.email_address} value={m.email_address} />
+                      ))}
+                    </datalist>
+                    <input type="text" placeholder="关键词 (如 OTP、验证码)" value={otpKeyword} onChange={(e) => setOtpKeyword(e.target.value)} style={{ width: 180 }} />
+                    <input type="number" min={10} max={600} value={otpTimeout} onChange={(e) => setOtpTimeout(Math.max(10, Math.min(600, Number(e.target.value) || 120)))} style={{ width: 70, textAlign: 'center' }} title="超时秒数" />
+                    <button className="primaryButton" onClick={waitForOTP} disabled={otpWaiting || !otpEmail}>
+                      {otpWaiting ? '等待中...' : '开始接码'}
+                    </button>
+                  </div>
+                  {otpResult && (
+                    <div style={{ padding: 12, borderRadius: 8, background: otpResult.found ? 'var(--ok-bg, #e6ffed)' : 'var(--err-bg, #fff0f0)', border: `1px solid ${otpResult.found ? '#34d058' : '#f44'}` }}>
+                      <strong>{otpResult.found ? '✓ 验证码' : '✗ 未收到'}</strong>
+                      {otpResult.found && <span style={{ fontSize: 24, fontWeight: 700, fontFamily: 'monospace', marginLeft: 12 }}>{otpResult.code}</span>}
+                      <span style={{ float: 'right', opacity: 0.6, fontSize: 13 }}>{otpResult.time}</span>
+                    </div>
+                  )}
+                  {otpHistory.length > 0 && (
+                    <div>
+                      <h3 style={{ margin: '8px 0' }}>历史记录</h3>
+                      <div className="tableWrap">
+                        <table>
+                          <thead><tr><th>邮箱</th><th>关键词</th><th>验证码</th><th>状态</th><th>时间</th></tr></thead>
+                          <tbody>
+                            {otpHistory.map((h, i) => (
+                              <tr key={i}>
+                                <td className="mono">{h.email}</td>
+                                <td>{h.keyword || '-'}</td>
+                                <td className="mono" style={{ fontWeight: 700 }}>{h.code || '-'}</td>
+                                <td>{h.found ? '✓' : '✗'}</td>
+                                <td className="mono">{h.time}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+                  <div style={{ marginTop: 8, padding: 16, background: 'var(--surface-1, #f6f8fa)', borderRadius: 8, fontSize: 13, lineHeight: 1.7 }}>
+                    <strong style={{ fontSize: 14 }}>外部 API 调用方式</strong>
+                    <p style={{ margin: '8px 0 4px', opacity: 0.7 }}>基础地址: <code>{location.origin}</code></p>
+                    <hr style={{ border: 'none', borderTop: '1px solid var(--border, #e1e4e8)', margin: '8px 0' }} />
+
+                    <strong>1. 获取邮箱列表</strong>
+                    <code style={{ display: 'block', whiteSpace: 'pre-wrap', margin: '4px 0 8px', padding: 8, background: '#fff', borderRadius: 4, border: '1px solid #e1e4e8' }}>{`GET ${location.origin}/api/mailboxes?status=AVAILABLE&limit=200`}</code>
+                    <span style={{ opacity: 0.7 }}>返回:</span>
+                    <code style={{ display: 'block', whiteSpace: 'pre-wrap', margin: '4px 0 12px', padding: 8, background: '#fff', borderRadius: 4, border: '1px solid #e1e4e8' }}>{`[
+  {"email_address": "xxx@outlook.com", "status": "AVAILABLE", "refresh_token": "...", ...},
+  ...
+]`}</code>
+
+                    <strong>2. 等待验证码（长轮询）</strong>
+                    <code style={{ display: 'block', whiteSpace: 'pre-wrap', margin: '4px 0 8px', padding: 8, background: '#fff', borderRadius: 4, border: '1px solid #e1e4e8' }}>{`POST ${location.origin}/api/mailboxes/wait-otp
+Content-Type: application/json
+
+{"email_address": "xxx@outlook.com", "subject_keyword": "验证码", "timeout_seconds": 120}`}</code>
+                    <span style={{ opacity: 0.7 }}>返回:</span>
+                    <code style={{ display: 'block', whiteSpace: 'pre-wrap', margin: '4px 0 12px', padding: 8, background: '#fff', borderRadius: 4, border: '1px solid #e1e4e8' }}>{`{"found": true, "content_extracted": "123456"}`}</code>
+
+                    <strong>3. 批量注册控制</strong>
+                    <code style={{ display: 'block', whiteSpace: 'pre-wrap', margin: '4px 0 8px', padding: 8, background: '#fff', borderRadius: 4, border: '1px solid #e1e4e8' }}>{`// 查询进度
+GET ${location.origin}/api/mailboxes/register
+
+// 启动批量注册（count 个）
+POST ${location.origin}/api/mailboxes/register
+{"count": 10}
+
+// 启动持续注册
+POST ${location.origin}/api/mailboxes/register
+{"continuous": true}
+
+// 取消注册
+POST ${location.origin}/api/mailboxes/register
+{"cancel": true}`}</code>
+                    <span style={{ opacity: 0.7 }}>查询返回:</span>
+                    <code style={{ display: 'block', whiteSpace: 'pre-wrap', margin: '4px 0', padding: 8, background: '#fff', borderRadius: 4, border: '1px solid #e1e4e8' }}>{`{"running": true, "total": 10, "done": 3, "remaining": 7, "continuous": false}`}</code>
+                  </div>
+                </div>
+              </div>
+            </section>
+          )}
+
+          {activeView === 'jobs' && (
             <section className="workspace jobsWorkspace">
               <div className="panel jobsPanel">
                 <PanelHeader title="工作流" icon={<Activity size={16} />}>
@@ -511,14 +675,14 @@ function NavItem({ active, icon, label, count, onClick }: {
   active: boolean;
   icon: React.ReactNode;
   label: string;
-  count: number;
+  count?: number;
   onClick: () => void;
 }) {
   return (
     <button className={`navItem ${active ? 'active' : ''}`} onClick={onClick}>
       <span>{icon}</span>
       <strong>{label}</strong>
-      <em>{count}</em>
+      {count != null && <em>{count}</em>}
     </button>
   );
 }
@@ -769,7 +933,7 @@ function JobTable({ jobs, selected, busy, onSelect, onRetry }: {
     <div className="tableWrap">
       <table>
         <thead>
-          <tr><th>Job</th><th>动作</th><th>状态</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
+          <tr><th>Job</th><th>动作</th><th>状态</th><th>完成时间</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
         </thead>
         <tbody>
           {jobs.map((job) => (
@@ -777,6 +941,7 @@ function JobTable({ jobs, selected, busy, onSelect, onRetry }: {
               <td className="mono">{short(job.job_id)}</td>
               <td>{job.action}</td>
               <td><StatusBadge status={job.status} retryable={job.retryable} /></td>
+              <td className="mono">{formatBeijingTime(job.updated_at, job.status)}</td>
               <td className="mono">{formatDuration(job.created_at, job.updated_at, job.status)}</td>
               <td>{job.last_step || '-'}</td>
               <td>
@@ -846,7 +1011,7 @@ function MailboxPanel({ mailboxes, selected, busy, showSecrets, oauthing, onSele
       <div className="tableWrap">
         <table>
           <thead>
-            <tr><th>邮箱</th><th>类型</th><th>状态</th><th>Token</th><th>更新</th><th>错误</th><th>操作</th></tr>
+            <tr><th>邮箱</th><th>密码</th><th>类型</th><th>状态</th><th>Token</th><th>更新</th><th>错误</th><th>操作</th></tr>
           </thead>
           <tbody>
             {mailboxes.map((mailbox) => {
@@ -855,10 +1020,19 @@ function MailboxPanel({ mailboxes, selected, busy, showSecrets, oauthing, onSele
               return (
                 <tr key={mailbox.email_address} className={selected === mailbox.email_address ? 'selected' : ''} onClick={() => onSelect(mailbox)}>
                   <td>
-                    <div className="cellStack">
+                    <div className="cellStack" style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); copyText(mailbox.email_address); onDone(`已复制邮箱: ${mailbox.email_address}`); }}>
                       <span>{showSecrets ? mailbox.email_address : maskEmail(mailbox.email_address)}</span>
                       <small>{mailbox.primary_email || '-'}</small>
                     </div>
+                  </td>
+                  <td>
+                    {mailbox.password ? (
+                      <span className="mono" style={{ fontSize: 12, cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); copyText(mailbox.password); onDone(`已复制密码: ${mailbox.password}`); }}>
+                        {showSecrets ? mailbox.password : '••••••'}
+                      </span>
+                    ) : (
+                      <span className="muted">-</span>
+                    )}
                   </td>
                   <td>{mailbox.is_primary ? '主邮箱' : 'Alias'}</td>
                   <td><StatusBadge status={mailbox.status} /></td>
@@ -1143,6 +1317,13 @@ function formatUnix(value: number) {
   return value ? new Date(value * 1000).toLocaleString() : '-';
 }
 
+function formatBeijingTime(dateStr: string, status: string) {
+  if (!dateStr || status === 'RUNNING' || status === 'CREATED') return '-';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return '-';
+  return d.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+}
+
 function formatDuration(createdAt: string, updatedAt: string, status: string) {
   if (!createdAt) return '-';
   const start = new Date(createdAt).getTime();
@@ -1186,7 +1367,18 @@ function formatJSON(value: string) {
 
 function copyText(value: string) {
   if (!value) return;
-  void navigator.clipboard?.writeText(value);
+  if (navigator.clipboard?.writeText) {
+    void navigator.clipboard.writeText(value);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = value;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+  }
 }
 
 createRoot(document.getElementById('root')!).render(<App />);

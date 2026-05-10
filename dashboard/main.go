@@ -30,8 +30,9 @@ type server struct {
 	emailClient        pb.EmailServiceClient
 	db                 *sql.DB
 	staticDir          string
-	mailboxRegisterMu  sync.Mutex
-	mailboxRegistering bool
+	mailboxRegisterMu     sync.Mutex
+	mailboxRegistering    bool
+	mailboxRegisterCancel context.CancelFunc
 }
 
 type jobRow struct {
@@ -131,12 +132,16 @@ func main() {
 		staticDir:          envDefault("STATIC_DIR", "web/dist"),
 	}
 
+	s.initBatchTable(ctx)
+	s.resumeBatch()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/health", s.handleHealth)
 	mux.HandleFunc("/api/accounts", s.handleAccounts)
 	mux.HandleFunc("/api/accounts/", s.handleAccount)
 	mux.HandleFunc("/api/mailboxes/register", s.handleMailboxRegister)
 	mux.HandleFunc("/api/mailboxes/oauth", s.handleMailboxOAuth)
+	mux.HandleFunc("/api/mailboxes/wait-otp", s.handleMailboxWaitOTP)
 	mux.HandleFunc("/api/mailboxes", s.handleMailboxes)
 	mux.HandleFunc("/api/jobs", s.handleJobs)
 	mux.HandleFunc("/api/jobs/", s.handleJob)
@@ -248,45 +253,235 @@ func (s *server) handleMailboxes(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *server) handleMailboxRegister(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+// ─── Batch registration with DB persistence ───
+
+func (s *server) initBatchTable(ctx context.Context) {
+	_, err := s.db.ExecContext(ctx, `
+		CREATE TABLE IF NOT EXISTS batch_registration (
+			id         SERIAL PRIMARY KEY,
+			total      INT NOT NULL,
+			done       INT NOT NULL DEFAULT 0,
+			cancelled  BOOLEAN NOT NULL DEFAULT FALSE,
+			continuous BOOLEAN NOT NULL DEFAULT FALSE,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)`)
+	if err != nil {
+		log.Fatalf("create batch_registration table: %v", err)
+	}
+	// add continuous column if upgrading from older schema
+	s.db.ExecContext(ctx, `ALTER TABLE batch_registration ADD COLUMN IF NOT EXISTS continuous BOOLEAN NOT NULL DEFAULT FALSE`)
+}
+
+type batchState struct {
+	ID         int
+	Total      int
+	Done       int
+	Cancelled  bool
+	Continuous bool
+}
+
+func (s *server) loadActiveBatch() *batchState {
+	row := s.db.QueryRow(`SELECT id, total, done, cancelled, continuous FROM batch_registration WHERE cancelled = FALSE AND (done < total OR continuous = TRUE) ORDER BY id DESC LIMIT 1`)
+	var b batchState
+	if err := row.Scan(&b.ID, &b.Total, &b.Done, &b.Cancelled, &b.Continuous); err != nil {
+		return nil
+	}
+	return &b
+}
+
+func (s *server) resumeBatch() {
+	b := s.loadActiveBatch()
+	if b == nil {
 		return
 	}
+	log.Printf("resuming batch %d: done=%d total=%d continuous=%v", b.ID, b.Done, b.Total, b.Continuous)
+	s.startBatchLoop(b.ID, b.Total, b.Done, b.Continuous)
+}
 
+func (s *server) startBatchLoop(batchID, total, startFrom int, continuous bool) {
 	s.mailboxRegisterMu.Lock()
 	if s.mailboxRegistering {
 		s.mailboxRegisterMu.Unlock()
-		writeError(w, http.StatusConflict, errors.New("mailbox registration is already running"))
 		return
 	}
 	s.mailboxRegistering = true
+	batchCtx, batchCancel := context.WithCancel(context.Background())
+	s.mailboxRegisterCancel = batchCancel
 	s.mailboxRegisterMu.Unlock()
 
 	go func() {
 		defer func() {
+			batchCancel()
 			s.mailboxRegisterMu.Lock()
 			s.mailboxRegistering = false
+			s.mailboxRegisterCancel = nil
 			s.mailboxRegisterMu.Unlock()
 		}()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(envInt("MAILBOX_REGISTER_TIMEOUT_SECONDS", 1800))*time.Second)
-		defer cancel()
-		resp, err := s.orchestratorClient.RegisterMailbox(ctx, &pb.RegisterMailboxRequest{})
-		if err != nil {
-			log.Printf("mailbox registration workflow failed to start: %v", err)
-			return
-		}
-		if resp.GetErrorMessage() != "" {
-			log.Printf("mailbox registration workflow job=%s failed: %s", resp.GetJobId(), resp.GetErrorMessage())
-			return
-		}
-		log.Printf("mailbox registration workflow job=%s completed success=%v exit_code=%d", resp.GetJobId(), resp.GetSuccess(), resp.GetExitCode())
-	}()
+		timeoutPerJob := time.Duration(envInt("MAILBOX_REGISTER_TIMEOUT_SECONDS", 1800)) * time.Second
+		cooldownThreshold := time.Duration(envInt("MAILBOX_REGISTER_COOLDOWN_THRESHOLD_SECONDS", 2)) * time.Second
+		cooldownPause := time.Duration(envInt("MAILBOX_REGISTER_COOLDOWN_PAUSE_SECONDS", 60)) * time.Second
+		consecutiveFastCount := 0
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
-		"started": true,
-		"backend": "outlook-register-service",
-	})
+		for i := startFrom + 1; continuous || i <= total; i++ {
+			if batchCtx.Err() != nil {
+				s.db.Exec(`UPDATE batch_registration SET cancelled = TRUE WHERE id = $1`, batchID)
+				log.Printf("mailbox registration batch %d cancelled at %d", batchID, i)
+				return
+			}
+
+			start := time.Now()
+			ctx, cancel := context.WithTimeout(batchCtx, timeoutPerJob)
+			resp, err := s.orchestratorClient.RegisterMailbox(ctx, &pb.RegisterMailboxRequest{})
+			cancel()
+			elapsed := time.Since(start)
+
+			// update done counter
+			if continuous {
+				s.db.Exec(`UPDATE batch_registration SET done = done + 1, total = done + 1 WHERE id = $1`, batchID)
+			} else {
+				s.db.Exec(`UPDATE batch_registration SET done = $1 WHERE id = $2`, i, batchID)
+			}
+
+			label := fmt.Sprintf("[%d", i)
+			if !continuous {
+				label += fmt.Sprintf("/%d", total)
+			}
+			label += fmt.Sprintf("] batch=%d", batchID)
+
+			if err != nil {
+				log.Printf("mailbox registration %s failed (%s): %v", label, elapsed.Truncate(time.Second), err)
+			} else if resp.GetErrorMessage() != "" {
+				log.Printf("mailbox registration %s job=%s failed (%s): %s", label, resp.GetJobId(), elapsed.Truncate(time.Second), resp.GetErrorMessage())
+			} else {
+				log.Printf("mailbox registration %s job=%s success=%v (%s)", label, resp.GetJobId(), resp.GetSuccess(), elapsed.Truncate(time.Second))
+				// warm-up: poll each newly registered mailbox to activate OAuth token path
+				for _, mb := range resp.GetMailboxes() {
+					email := mb.GetEmailAddress()
+					if email == "" {
+						continue
+					}
+					go func(addr string) {
+						warmCtx, warmCancel := context.WithTimeout(context.Background(), 15*time.Second)
+						defer warmCancel()
+						_, warmErr := s.emailClient.WaitForEmail(warmCtx, &pb.WaitForEmailRequest{
+							EmailAddress:   addr,
+							SubjectKeyword: "__warmup__",
+							TimeoutSeconds: 1,
+						})
+						if warmErr != nil {
+							log.Printf("mailbox warm-up poll for %s: %v (non-fatal)", addr, warmErr)
+						} else {
+							log.Printf("mailbox warm-up poll for %s: ok", addr)
+						}
+					}(email)
+				}
+			}
+
+			// cooldown: if 3 consecutive jobs finish in < threshold, pause
+			if elapsed < cooldownThreshold {
+				consecutiveFastCount++
+				if consecutiveFastCount >= 3 {
+					log.Printf("mailbox registration %s: %d consecutive fast failures (<%.0fs), cooling down %.0fs", label, consecutiveFastCount, cooldownThreshold.Seconds(), cooldownPause.Seconds())
+					consecutiveFastCount = 0
+					select {
+					case <-batchCtx.Done():
+						s.db.Exec(`UPDATE batch_registration SET cancelled = TRUE WHERE id = $1`, batchID)
+						return
+					case <-time.After(cooldownPause):
+					}
+				}
+			} else {
+				consecutiveFastCount = 0
+			}
+		}
+		log.Printf("mailbox registration batch %d finished", batchID)
+	}()
+}
+
+func (s *server) handleMailboxRegister(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.mailboxRegisterMu.Lock()
+		running := s.mailboxRegistering
+		s.mailboxRegisterMu.Unlock()
+		b := s.loadActiveBatch()
+		var total, done, remaining int
+		var continuous bool
+		if b != nil {
+			total = b.Total
+			done = b.Done
+			remaining = total - done
+			continuous = b.Continuous
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"running":    running,
+			"total":      total,
+			"done":       done,
+			"remaining":  remaining,
+			"continuous": continuous,
+		})
+	case http.MethodPost:
+		var body struct {
+			Count      int  `json:"count"`
+			Cancel     bool `json:"cancel"`
+			Continuous bool `json:"continuous"`
+		}
+		_ = readJSON(r, &body)
+
+		if body.Cancel {
+			s.mailboxRegisterMu.Lock()
+			if s.mailboxRegistering && s.mailboxRegisterCancel != nil {
+				s.mailboxRegisterCancel()
+			}
+			s.mailboxRegisterMu.Unlock()
+			res, _ := s.db.Exec(`UPDATE batch_registration SET cancelled = TRUE WHERE cancelled = FALSE AND (done < total OR continuous = TRUE)`)
+			affected, _ := res.RowsAffected()
+			writeJSON(w, http.StatusOK, map[string]any{"cancelled": affected > 0})
+			return
+		}
+
+		continuous := body.Continuous
+		count := body.Count
+		if continuous {
+			count = 0
+		} else {
+			if count <= 0 {
+				count = 1
+			}
+			if count > 1000 {
+				count = 1000
+			}
+		}
+
+		s.mailboxRegisterMu.Lock()
+		if s.mailboxRegistering {
+			s.mailboxRegisterMu.Unlock()
+			writeError(w, http.StatusConflict, errors.New("mailbox registration is already running"))
+			return
+		}
+		s.mailboxRegisterMu.Unlock()
+
+		// cancel any lingering DB batches
+		s.db.Exec(`UPDATE batch_registration SET cancelled = TRUE WHERE cancelled = FALSE AND (done < total OR continuous = TRUE)`)
+		// insert new batch
+		var batchID int
+		err := s.db.QueryRow(`INSERT INTO batch_registration (total, done, continuous) VALUES ($1, 0, $2) RETURNING id`, count, continuous).Scan(&batchID)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+
+		s.startBatchLoop(batchID, count, 0, continuous)
+
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"started":    true,
+			"count":      count,
+			"continuous": continuous,
+			"batch_id":   batchID,
+		})
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
 }
 
 func (s *server) handleMailboxOAuth(w http.ResponseWriter, r *http.Request) {
@@ -680,6 +875,50 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 
 func writeError(w http.ResponseWriter, status int, err error) {
 	writeJSON(w, status, map[string]string{"error": err.Error()})
+}
+
+func (s *server) handleMailboxWaitOTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		EmailAddress   string `json:"email_address"`
+		SubjectKeyword string `json:"subject_keyword"`
+		TimeoutSeconds int32  `json:"timeout_seconds"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.EmailAddress == "" {
+		writeError(w, http.StatusBadRequest, errors.New("email_address is required"))
+		return
+	}
+	if req.TimeoutSeconds <= 0 {
+		req.TimeoutSeconds = 120
+	}
+	if req.TimeoutSeconds > 600 {
+		req.TimeoutSeconds = 600
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), time.Duration(req.TimeoutSeconds+5)*time.Second)
+	defer cancel()
+
+	resp, err := s.emailClient.WaitForEmail(ctx, &pb.WaitForEmailRequest{
+		EmailAddress:   req.EmailAddress,
+		SubjectKeyword: req.SubjectKeyword,
+		TimeoutSeconds: req.TimeoutSeconds,
+		IssuedAfterUnix: time.Now().Add(-10 * time.Minute).Unix(),
+	})
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"found":             resp.GetFound(),
+		"content_extracted": resp.GetContentExtracted(),
+	})
 }
 
 func queryInt(r *http.Request, key string, fallback int) int {

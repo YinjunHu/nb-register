@@ -1,0 +1,121 @@
+port: 7890
+socks-port: 7891
+mixed-port: 7897
+allow-lan: true
+mode: rule
+log-level: warning
+find-process-mode: off
+external-controller: 0.0.0.0:9090
+
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
+  enhanced-mode: redir-host
+  nameserver:
+    - 223.5.5.5
+    - 114.114.114.114
+  fallback:
+    - tls://8.8.8.8
+    - tls://1.1.1.1
+  fallback-filter:
+    geoip: true
+    geoip-code: CN
+
+proxy-providers:
+  yifen:
+    type: http
+    url: "https://login.yfjc.xyz/api/v1/client/subscribe?token=5703f906fae4e64dddf9a9024122606b&flag=mihomo"
+    path: ./proxies/yifen.yaml
+    interval: 86400
+    health-check:
+      enable: true
+      interval: 90
+      url: https://www.gstatic.com/generate_204
+  luyuyun:
+    type: http
+    url: "https://cea13adedf958a5c73b57ad62cb0e5b8.hc-cdn.co/hc-cdn.com/1768394797"
+    path: ./proxies/luyuyun.yaml
+    interval: 86400
+    health-check:
+      enable: true
+      interval: 300
+      url: https://www.gstatic.com/generate_204
+  vvcloud:
+    type: http
+    url: "https://s.vvud.us/s/986ce22350ff6c1bc9ba2f9494307631"
+    path: ./proxies/vvcloud.yaml
+    interval: 86400
+    health-check:
+      enable: true
+      interval: 300
+      url: https://www.gstatic.com/generate_204
+  xxyun:
+    type: http
+    url: "http://8.211.165.165:51800/api/v1/client/subscribe?token=493ca6a4d2fa94734581713b0ba1785c"
+    path: ./proxies/xxyun.yaml
+    interval: 86400
+    health-check:
+      enable: true
+      interval: 300
+      url: https://www.gstatic.com/generate_204
+
+proxy-groups:
+  - name: PROXIES
+    type: select
+    proxies:
+      - 自动选择
+      - 故障转移
+      - 🇯🇵 日本专供
+      - 🇺🇸 美国专供
+      - 🌏 AI专供
+
+  - name: 自动选择
+    type: url-test
+    use: [yifen, luyuyun, vvcloud, xxyun]
+    url: https://www.gstatic.com/generate_204
+    interval: 90
+
+  - name: 故障转移
+    type: fallback
+    use: [yifen, luyuyun, vvcloud, xxyun]
+    url: https://www.gstatic.com/generate_204
+    interval: 90
+
+  - name: 🇯🇵 日本专供
+    type: fallback
+    proxies:
+      - 自动选择
+    use: [yifen, luyuyun, vvcloud, xxyun]
+    filter: "(?i)日本|东京|japan|tokyo|nrt"
+    url: https://www.gstatic.com/generate_204
+    interval: 90
+
+  - name: 🇺🇸 美国专供
+    type: fallback
+    proxies:
+      - 自动选择
+    use: [yifen, luyuyun, vvcloud, xxyun]
+    filter: "(?i)美国|US|ai解锁|家宽"
+    url: https://www.gstatic.com/generate_204
+    interval: 90
+
+  - name: 🌏 AI专供
+    type: url-test
+    use: [yifen, luyuyun, vvcloud, xxyun]
+    filter: "(?i)日本|japan|新加坡|singapore|美国|US|ai解锁"
+    url: https://www.gstatic.com/generate_204
+    interval: 90
+
+rules:
+  - DOMAIN-SUFFIX,duou.cc,DIRECT
+  - DOMAIN-SUFFIX,duou.ai,DIRECT
+  - DOMAIN-SUFFIX,openai.com,🌏 AI专供
+  - DOMAIN-SUFFIX,chatgpt.com,🌏 AI专供
+  - DOMAIN-SUFFIX,oaiusercontent.com,🌏 AI专供
+  - DOMAIN-SUFFIX,ai.com,🌏 AI专供
+  - DOMAIN-SUFFIX,anthropic.com,PROXIES
+  - DOMAIN-SUFFIX,claude.ai,PROXIES
+  - DOMAIN-SUFFIX,google.com,PROXIES
+  - DOMAIN-SUFFIX,github.com,PROXIES
+  - GEOIP,CN,DIRECT
+  - MATCH,PROXIES
