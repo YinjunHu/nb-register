@@ -769,7 +769,7 @@ function JobTable({ jobs, selected, busy, onSelect, onRetry }: {
     <div className="tableWrap">
       <table>
         <thead>
-          <tr><th>Job</th><th>动作</th><th>状态</th><th>步骤</th><th>操作</th></tr>
+          <tr><th>Job</th><th>动作</th><th>状态</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
         </thead>
         <tbody>
           {jobs.map((job) => (
@@ -777,6 +777,7 @@ function JobTable({ jobs, selected, busy, onSelect, onRetry }: {
               <td className="mono">{short(job.job_id)}</td>
               <td>{job.action}</td>
               <td><StatusBadge status={job.status} retryable={job.retryable} /></td>
+              <td className="mono">{formatDuration(job.created_at, job.updated_at, job.status)}</td>
               <td>{job.last_step || '-'}</td>
               <td>
                 <div className="rowActions" onClick={(event) => event.stopPropagation()}>
@@ -1140,6 +1141,24 @@ function maskEmail(value: string) {
 
 function formatUnix(value: number) {
   return value ? new Date(value * 1000).toLocaleString() : '-';
+}
+
+function formatDuration(createdAt: string, updatedAt: string, status: string) {
+  if (!createdAt) return '-';
+  const start = new Date(createdAt).getTime();
+  if (isNaN(start)) return '-';
+  const end = status === 'RUNNING' ? Date.now() : (updatedAt ? new Date(updatedAt).getTime() : Date.now());
+  if (isNaN(end)) return '-';
+  const ms = end - start;
+  if (ms < 0) return '-';
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainSec = seconds % 60;
+  if (minutes < 60) return `${minutes}m${remainSec > 0 ? remainSec + 's' : ''}`;
+  const hours = Math.floor(minutes / 60);
+  const remainMin = minutes % 60;
+  return `${hours}h${remainMin > 0 ? remainMin + 'm' : ''}`;
 }
 
 function trialText(value?: boolean) {
