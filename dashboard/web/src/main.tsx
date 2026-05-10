@@ -83,6 +83,55 @@ type Step = {
 
 type Toast = { kind: 'ok' | 'error'; text: string } | null;
 type ViewKey = 'accounts' | 'mailboxes' | 'mailboxRegistration' | 'otp' | 'jobs';
+type Lang = 'zh' | 'en';
+
+// ============== i18n 翻译 ==============
+const ZH_STATUS: Record<string, string> = {
+  RUNNING: '运行中', SUCCEEDED: '成功', FAILED_RETRYABLE: '失败(可重试)', FAILED_RECOVERABLE: '失败(可恢复)', FAILED_FINAL: '最终失败',
+  CREATED: '已创建', REGISTERED: '已注册', ACTIVATED: '已激活', EMAIL_ALREADY_EXISTS: '邮箱已存在', REGISTER_FAILED: '注册失败', PAYMENT_FAILED: '支付失败',
+  AVAILABLE: '可用', ASSIGNED: '已分配', OAUTH_PENDING: 'OAuth 进行中', USER_ALREADY_EXISTS: '用户已存在', REGISTRATION_FAILED: '注册失败', AUTH_FAILED: '认证失败', BLOCKED: '已封禁',
+};
+
+const ZH_ACTION: Record<string, string> = {
+  REGISTER_MAILBOX: '邮箱注册', MAILBOX_OAUTH: '邮箱认证', REGISTER: '注册账号', ACTIVATE: '激活账号',
+  REGISTER_AND_ACTIVATE: '注册并激活', PROBE_PLUS_TRIAL: '探测Plus试用',
+};
+
+const ZH_STEP: Record<string, string> = {
+  register_mailbox: '注册邮箱', mailbox_oauth: '邮箱OAuth', register: '注册', activate: '激活',
+  register_and_activate: '注册并激活', probe_plus_trial: '探测Plus试用',
+};
+
+const ZH_ERROR_PATTERNS: [RegExp, string][] = [
+  [/mailbox registration completed but returned no account records/, '邮箱注册流程完成但未产生账号记录（可能是验证码/人机验证失败）'],
+  [/mailbox registration failed with exit code (\d+)/, '邮箱注册脚本异常退出（退出码: $1）'],
+  [/CAPTCHA failed/, '人机验证(CAPTCHA)失败'],
+  [/Password fill failed.*Timeout/i, '密码填写超时（页面元素未加载）'],
+  [/Page\.screenshot.*Timeout/i, '页面截图超时（网络加载缓慢）'],
+  [/Timeout (\d+)ms exceeded/, '操作超时（$1ms）'],
+  [/OAuth.*timed out/i, 'OAuth 认证超时'],
+  [/mailbox OAuth failed:\s*(\d+)\/(\d+)/, '邮箱 OAuth 失败: $1/$2'],
+  [/mailbox registration is disabled/, '邮箱注册已禁用'],
+  [/registration already running/, '已有注册任务在运行'],
+  [/no mailbox records found to import/, '未找到可导入的邮箱记录'],
+];
+
+function tStatus(status: string, lang: Lang): string {
+  return lang === 'zh' ? (ZH_STATUS[status] || status) : status;
+}
+function tAction(action: string, lang: Lang): string {
+  return lang === 'zh' ? (ZH_ACTION[action] || action) : action;
+}
+function tStep(step: string, lang: Lang): string {
+  return lang === 'zh' ? (ZH_STEP[step] || step) : step;
+}
+function tError(msg: string, lang: Lang): string {
+  if (lang !== 'zh' || !msg) return msg;
+  for (const [pattern, replacement] of ZH_ERROR_PATTERNS) {
+    if (pattern.test(msg)) return msg.replace(pattern, replacement);
+  }
+  return msg;
+}
 
 const statusOptions = ['', 'CREATED', 'REGISTERED', 'ACTIVATED', 'EMAIL_ALREADY_EXISTS', 'REGISTER_FAILED', 'PAYMENT_FAILED'];
 const jobStatusOptions = ['', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_RECOVERABLE', 'FAILED_FINAL'];
@@ -114,6 +163,7 @@ function App() {
   const [otpResult, setOtpResult] = useState<{found: boolean; code: string; time: string} | null>(null);
   const [otpWaiting, setOtpWaiting] = useState(false);
   const [otpHistory, setOtpHistory] = useState<{email: string; keyword: string; code: string; found: boolean; time: string}[]>([]);
+  const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('nb-lang') as Lang) || 'zh');
 
   async function refresh() {
     setBusy(true);
@@ -368,6 +418,9 @@ function App() {
           <p>账号、注册、激活和 GoPay 工作流控制台</p>
         </div>
         <div className="topbarActions">
+          <button className="secondaryButton" onClick={() => { const next: Lang = lang === 'zh' ? 'en' : 'zh'; setLang(next); localStorage.setItem('nb-lang', next); }} title="切换语言 / Switch Language" style={{ fontSize: 13, padding: '4px 10px' }}>
+            {lang === 'zh' ? 'EN' : '中文'}
+          </button>
           <button className="primaryButton" onClick={refresh} disabled={busy}>
             <RefreshCcw size={16} /> 刷新
           </button>
@@ -404,7 +457,7 @@ function App() {
                       {showSecrets ? '隐藏' : '显示'}
                     </button>
                     <select value={accountStatus} onChange={(e) => setAccountStatus(e.target.value)}>
-                      {statusOptions.map((s) => <option key={s} value={s}>{s || '全部状态'}</option>)}
+                      {statusOptions.map((s) => <option key={s} value={s}>{s ? tStatus(s, lang) : '全部状态'}</option>)}
                     </select>
                   </div>
                 </PanelHeader>
@@ -434,7 +487,7 @@ function App() {
                 <PanelHeader title="最近工作流" icon={<Activity size={16} />}>
                   <button className="secondaryButton" onClick={() => openView('jobs')}>查看全部</button>
                 </PanelHeader>
-                <JobTable jobs={jobs.slice(0, 8)} selected={selectedJob?.job_id} busy={busy} onSelect={selectJob} onRetry={retryJob} />
+                <JobTable jobs={jobs.slice(0, 8)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
               </div>
             </section>
           )}
@@ -452,7 +505,7 @@ function App() {
                       {showSecrets ? '隐藏' : '显示'}
                     </button>
                     <select value={mailboxStatus} onChange={(e) => setMailboxStatus(e.target.value)}>
-                      {mailboxStatusOptions.map((s) => <option key={s} value={s}>{s || '全部状态'}</option>)}
+                      {mailboxStatusOptions.map((s) => <option key={s} value={s}>{s ? tStatus(s, lang) : '全部状态'}</option>)}
                     </select>
                   </div>
                 </PanelHeader>
@@ -478,7 +531,7 @@ function App() {
                         <ListChecks size={14} /> 全部工作流
                       </button>
                     </div>
-                    <JobTable jobs={mailboxOAuthJobs.slice(0, 10)} selected={selectedJob?.job_id} busy={busy} onSelect={selectJob} onRetry={retryJob} />
+                    <JobTable jobs={mailboxOAuthJobs.slice(0, 10)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
                   </>
                 )}
 	              </div>
@@ -527,7 +580,7 @@ function App() {
 	                      <ListChecks size={14} /> 全部工作流
 	                    </button>
 	                  </div>
-	                  <JobTable jobs={mailboxRegisterJobs.slice(0, 20)} selected={selectedJob?.job_id} busy={busy} onSelect={selectJob} onRetry={retryJob} />
+	                  <JobTable jobs={mailboxRegisterJobs.slice(0, 20)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
 	                </div>
 	              </div>
 	            </section>
@@ -628,10 +681,10 @@ POST ${location.origin}/api/mailboxes/register
               <div className="panel jobsPanel">
                 <PanelHeader title="工作流" icon={<Activity size={16} />}>
                   <select value={jobStatus} onChange={(e) => setJobStatus(e.target.value)}>
-                    {jobStatusOptions.map((s) => <option key={s} value={s}>{s || '全部状态'}</option>)}
+                    {jobStatusOptions.map((s) => <option key={s} value={s}>{s ? tStatus(s, lang) : '全部状态'}</option>)}
                   </select>
                 </PanelHeader>
-                <JobTable jobs={jobs} selected={selectedJob?.job_id} busy={busy} onSelect={selectJob} onRetry={retryJob} />
+                <JobTable jobs={jobs} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
               </div>
             </section>
           )}
@@ -656,6 +709,7 @@ POST ${location.origin}/api/mailboxes/register
           <JobDetails
             job={selectedJob}
             busy={busy}
+            lang={lang}
             onJobRetry={retryJob}
             onOtpSubmit={submitJobOtp}
           />
@@ -773,9 +827,10 @@ function AccountDetails({ account, showSecrets, busy, onSessionSave, onAccessSav
   );
 }
 
-function JobDetails({ job, busy, onJobRetry, onOtpSubmit }: {
+function JobDetails({ job, busy, lang, onJobRetry, onOtpSubmit }: {
   job: Job;
   busy: boolean;
+  lang: Lang;
   onJobRetry: (job: Job) => void;
   onOtpSubmit: (job: Job, otp: string) => Promise<void>;
 }) {
@@ -791,18 +846,18 @@ function JobDetails({ job, busy, onJobRetry, onOtpSubmit }: {
           )}
         </div>
         <KV label="Job" value={job.job_id} mono />
-        <KV label="Action" value={job.action} />
-        <KV label="Status" value={job.status} />
-        <KV label="Error" value={job.error_message || '-'} />
+        <KV label={lang === 'zh' ? '动作' : 'Action'} value={tAction(job.action, lang)} />
+        <KV label={lang === 'zh' ? '状态' : 'Status'} value={tStatus(job.status, lang)} />
+        <KV label={lang === 'zh' ? '错误' : 'Error'} value={tError(job.error_message, lang) || '-'} />
         {canSubmitOtp(job) && <OtpSubmitter job={job} onSubmit={onOtpSubmit} />}
         <div className="timeline">
           {(job.steps || []).map((step) => (
             <div className="step" key={step.step_name}>
               <div>
-                <strong>{step.step_name}</strong>
-                <StatusBadge status={step.status} retryable={step.retryable} />
+                <strong>{tStep(step.step_name, lang)}</strong>
+                <StatusBadge status={step.status} retryable={step.retryable} lang={lang} />
               </div>
-              {step.error_message && <p>{step.error_message}</p>}
+              {step.error_message && <p>{tError(step.error_message, lang)}</p>}
               {step.result_json && <pre>{formatJSON(step.result_json)}</pre>}
             </div>
           ))}
@@ -922,10 +977,11 @@ function AccountTable({ accounts, selected, showSecrets, runningAccountIds, busy
   );
 }
 
-function JobTable({ jobs, selected, busy, onSelect, onRetry }: {
+function JobTable({ jobs, selected, busy, lang, onSelect, onRetry }: {
   jobs: Job[];
   selected?: string;
   busy: boolean;
+  lang: Lang;
   onSelect: (j: Job) => void;
   onRetry: (j: Job) => void;
 }) {
@@ -939,11 +995,11 @@ function JobTable({ jobs, selected, busy, onSelect, onRetry }: {
           {jobs.map((job) => (
             <tr key={job.job_id} className={selected === job.job_id ? 'selected' : ''} onClick={() => onSelect(job)}>
               <td className="mono">{short(job.job_id)}</td>
-              <td>{job.action}</td>
-              <td><StatusBadge status={job.status} retryable={job.retryable} /></td>
+              <td>{tAction(job.action, lang)}</td>
+              <td><StatusBadge status={job.status} retryable={job.retryable} lang={lang} /></td>
               <td className="mono">{formatBeijingTime(job.updated_at, job.status)}</td>
               <td className="mono">{formatDuration(job.created_at, job.updated_at, job.status)}</td>
-              <td>{job.last_step || '-'}</td>
+              <td>{tStep(job.last_step, lang) || '-'}</td>
               <td>
                 <div className="rowActions" onClick={(event) => event.stopPropagation()}>
                   {canRetryJob(job) ? (
@@ -1250,9 +1306,9 @@ function KV({ label, value, mono }: { label: string; value: string; mono?: boole
   );
 }
 
-function StatusBadge({ status, retryable }: { status: string; retryable?: boolean }) {
+function StatusBadge({ status, retryable, lang = 'en' }: { status: string; retryable?: boolean; lang?: Lang }) {
   const cls = status.includes('FAILED') || status.includes('EXISTS') || status === 'BLOCKED' ? 'bad' : status === 'SUCCEEDED' || status === 'ACTIVATED' || status === 'REGISTERED' ? 'good' : 'mid';
-  return <span className={`badge ${cls}`}>{status || '-'}{retryable ? ' / retry' : ''}</span>;
+  return <span className={`badge ${cls}`}>{tStatus(status, lang) || '-'}{retryable ? (lang === 'zh' ? ' / 可重试' : ' / retry') : ''}</span>;
 }
 
 function TrialBadge({ eligible }: { eligible?: boolean }) {
