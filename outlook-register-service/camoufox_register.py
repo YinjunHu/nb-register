@@ -611,7 +611,11 @@ def outlook_register(
 
     def _on_response(response):
         try:
-            _traffic["bytes"] += len(response.body())
+            cl = response.headers.get("content-length")
+            if cl:
+                _traffic["bytes"] += int(cl)
+            else:
+                _traffic["bytes"] += len(response.body())
         except Exception:
             pass
 
