@@ -175,10 +175,10 @@ function App() {
     setBusy(true);
     try {
       const [accountsData, jobsData, mailboxesData, runningJobsData] = await Promise.all([
-        api<Account[]>(`/api/accounts?limit=500${accountStatus ? `&status=${accountStatus}` : ''}`),
-        api<Job[]>(`/api/jobs?limit=500${jobStatus ? `&status=${jobStatus}` : ''}`),
-        api<Mailbox[]>(`/api/mailboxes?limit=500${mailboxStatus ? `&status=${mailboxStatus}` : ''}`),
-        api<Job[]>('/api/jobs?limit=500&status=RUNNING')
+        api<Account[]>(`/api/accounts?limit=1000${accountStatus ? `&status=${accountStatus}` : ''}`),
+        api<Job[]>(`/api/jobs?limit=1000${jobStatus ? `&status=${jobStatus}` : ''}`),
+        api<Mailbox[]>(`/api/mailboxes?limit=1000${mailboxStatus ? `&status=${mailboxStatus}` : ''}`),
+        api<Job[]>('/api/jobs?limit=1000&status=RUNNING')
       ]);
       setAccounts(Array.isArray(accountsData) ? accountsData : []);
       setJobs(Array.isArray(jobsData) ? jobsData : []);
@@ -552,7 +552,7 @@ function App() {
                         <ListChecks size={14} /> 全部工作流
                       </button>
                     </div>
-                    <JobTable jobs={mailboxOAuthJobs.slice(0, 50)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
+                    <JobTable jobs={mailboxOAuthJobs} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
                   </>
                 )}
 	              </div>
@@ -583,13 +583,13 @@ function App() {
 	                </PanelHeader>
 	                <div style={{ padding: '10px 16px', background: 'var(--surface-1, #f6f8fa)', borderBottom: '1px solid var(--border, #e1e4e8)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
 	                  <span style={{ fontWeight: 600 }}>邮箱生成规则:</span>
-	                  <input type="text" placeholder="固定前缀(可选)" value={mailboxEmailCfg.prefix} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, prefix: e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 14) })} style={{ width: 110 }} disabled={busy || mailboxRegistering} title="固定前缀，拼接在随机部分之前" />
+	                  <input type="text" placeholder="固定前缀(可选)" value={mailboxEmailCfg.prefix} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, prefix: e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 14) })} style={{ width: 130 }} disabled={busy || mailboxRegistering} title="固定前缀，拼接在随机部分之前" />
 	                  <span>+</span>
 	                  <label style={{ display: 'flex', alignItems: 'center', gap: 3 }} title="随机部分最短长度">
 	                    <span>长度</span>
-	                    <input type="number" min={1} max={20} value={mailboxEmailCfg.min} onChange={(e) => { const v = Math.max(1, Math.min(20, Number(e.target.value) || 1)); setMailboxEmailCfg({ ...mailboxEmailCfg, min: v, max: Math.max(v, mailboxEmailCfg.max) }); }} style={{ width: 42, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
+	                    <input type="number" min={1} max={20} value={mailboxEmailCfg.min} onChange={(e) => { const v = Math.max(1, Math.min(20, Number(e.target.value) || 1)); setMailboxEmailCfg({ ...mailboxEmailCfg, min: v, max: Math.max(v, mailboxEmailCfg.max) }); }} style={{ width: 56, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
 	                    <span>-</span>
-	                    <input type="number" min={1} max={20} value={mailboxEmailCfg.max} onChange={(e) => { const v = Math.max(mailboxEmailCfg.min, Math.min(20, Number(e.target.value) || 1)); setMailboxEmailCfg({ ...mailboxEmailCfg, max: v }); }} style={{ width: 42, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
+	                    <input type="number" min={1} max={20} value={mailboxEmailCfg.max} onChange={(e) => { const v = Math.max(mailboxEmailCfg.min, Math.min(20, Number(e.target.value) || 1)); setMailboxEmailCfg({ ...mailboxEmailCfg, max: v }); }} style={{ width: 56, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
 	                  </label>
 	                  <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
 	                    <input type="checkbox" checked={mailboxEmailCfg.upper} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, upper: e.target.checked })} disabled={busy || mailboxRegistering} /> A-Z
@@ -627,7 +627,7 @@ function App() {
 	                      <ListChecks size={14} /> 全部工作流
 	                    </button>
 	                  </div>
-	                  <JobTable jobs={mailboxRegisterJobs.slice(0, 100)} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
+	                  <JobTable jobs={mailboxRegisterJobs} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
 	                </div>
 	              </div>
 	            </section>

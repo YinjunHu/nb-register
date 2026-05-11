@@ -835,8 +835,8 @@ func (s *server) handleRegisterAndActivate(w http.ResponseWriter, r *http.Reques
 
 func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error) {
 	limit := queryInt(r, "limit", 100)
-	if limit <= 0 || limit > 500 {
-		limit = 100
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
 	}
 
 	query := `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE 1=1`
