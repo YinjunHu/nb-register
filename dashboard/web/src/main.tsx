@@ -46,6 +46,7 @@ type Job = {
   last_step: string;
   error_message: string;
   result_json: string;
+  retry_count: number;
   created_at: string;
   updated_at: string;
   steps?: Step[];
@@ -60,6 +61,7 @@ type Mailbox = {
   last_error: string;
   is_primary: boolean;
   primary_email: string;
+  fail_count: number;
   created_at: number;
   updated_at: number;
 };
@@ -170,6 +172,7 @@ function App() {
   const [otpWaiting, setOtpWaiting] = useState(false);
   const [otpHistory, setOtpHistory] = useState<{email: string; keyword: string; code: string; found: boolean; time: string}[]>([]);
   const [lang, setLang] = useState<Lang>(() => (localStorage.getItem('nb-lang') as Lang) || 'zh');
+  const [trafficStats, setTrafficStats] = useState<{total_registrations: number; success_registrations: number; failed_registrations: number; total_traffic_bytes: number; total_traffic_mb: number}>({total_registrations: 0, success_registrations: 0, failed_registrations: 0, total_traffic_bytes: 0, total_traffic_mb: 0});
 
   async function refresh() {
     setBusy(true);
@@ -192,6 +195,7 @@ function App() {
         setMailboxRegisterProgress(prog);
         setMailboxRegistering(prog.running);
       } catch {}
+      try { setTrafficStats(await api('/api/stats')); } catch {}
       if (selectedJob) {
         setSelectedJob(await api<Job>(`/api/jobs/${selectedJob.job_id}`));
       }
@@ -252,11 +256,12 @@ function App() {
     }
   }
 
-  async function bulkDeleteMailboxes(status: string) {
+  async function bulkDeleteMailboxes(status: string, minFailCount = 0) {
     setBusy(true);
     try {
-      const resp = await api<{ deleted: number; status: string }>(`/api/mailboxes?status=${encodeURIComponent(status)}`, { method: 'DELETE' });
-      setToast({ kind: 'ok', text: `已删除 ${resp.deleted} 个 ${status} 邮箱` });
+      const qs = `status=${encodeURIComponent(status)}${minFailCount > 0 ? `&min_fail_count=${minFailCount}` : ''}`;
+      const resp = await api<{ deleted: number; status: string }>(`/api/mailboxes?${qs}`, { method: 'DELETE' });
+      setToast({ kind: 'ok', text: `已删除 ${resp.deleted} 个 ${status} 邮箱${minFailCount > 0 ? ` (失败≥${minFailCount}次)` : ''}` });
       if (selectedMailbox?.status === status) setSelectedMailbox(null);
       await refresh();
     } catch (err) {
@@ -549,7 +554,7 @@ function App() {
                     <button className="secondaryButton" onClick={() => runMailboxOAuth()} disabled={busy || !!mailboxOAuthing || missingOAuthCount === 0}>
                       <KeyRound size={16} /> 补 OAuth {missingOAuthCount > 0 ? `(${missingOAuthCount})` : ''}
                     </button>
-                    <button className="dangerButton" onClick={() => { if (confirm('确定删除所有 AUTH_FAILED 和 BLOCKED 邮箱？')) { bulkDeleteMailboxes('AUTH_FAILED'); bulkDeleteMailboxes('BLOCKED'); } }} disabled={busy} title="删除所有认证失败和被锁定的邮箱">
+                    <button className="dangerButton" onClick={() => { const input = prompt('清理失败邮箱\n输入最低失败次数（0=全部删除，默认0）:', '0'); if (input === null) return; const n = Math.max(0, parseInt(input) || 0); if (!confirm(`确定删除所有 AUTH_FAILED/BLOCKED 邮箱${n > 0 ? `（失败≥${n}次）` : ''}？`)) return; bulkDeleteMailboxes('AUTH_FAILED', n); bulkDeleteMailboxes('BLOCKED', n); }} disabled={busy} title="删除失败邮箱，可设置最低失败次数">
                       <Trash2 size={16} /> 清理失败邮箱
                     </button>
                     <button className="secondaryButton" onClick={() => setShowSecrets((v) => !v)}>
@@ -659,6 +664,17 @@ function App() {
 	                    </button>
 	                  </div>
 	                  <JobTable jobs={mailboxRegisterJobs} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
+	                  {trafficStats.total_registrations > 0 && (
+	                    <div style={{ padding: '10px 16px', background: 'var(--surface-1, #f6f8fa)', borderTop: '1px solid var(--border, #e1e4e8)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+	                      <span style={{ fontWeight: 600 }}>注册统计:</span>
+	                      <span>总计 <strong>{trafficStats.total_registrations}</strong> 次</span>
+	                      <span style={{ color: '#2ea44f' }}>成功 <strong>{trafficStats.success_registrations}</strong></span>
+	                      <span style={{ color: '#d32f2f' }}>失败 <strong>{trafficStats.failed_registrations}</strong></span>
+	                      <span>成功率 <strong>{trafficStats.total_registrations > 0 ? ((trafficStats.success_registrations / trafficStats.total_registrations) * 100).toFixed(1) : 0}%</strong></span>
+	                      <span style={{ marginLeft: 'auto', fontWeight: 600 }}>流量: <strong>{trafficStats.total_traffic_mb.toFixed(2)} MB</strong></span>
+	                      {trafficStats.success_registrations > 0 && <span style={{ opacity: 0.7 }}>均 {(trafficStats.total_traffic_mb / trafficStats.success_registrations).toFixed(2)} MB/次</span>}
+	                    </div>
+	                  )}
 	                </div>
 	              </div>
 	            </section>
@@ -1072,7 +1088,7 @@ function JobTable({ jobs, selected, busy, lang, onSelect, onRetry }: {
     <div className="tableWrap">
       <table>
         <thead>
-          <tr><th>Job</th><th>动作</th><th>状态</th><th>完成时间</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
+          <tr><th>Job</th><th>动作</th><th>状态</th><th>重试</th><th>完成时间</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
         </thead>
         <tbody>
           {jobs.map((job) => (
@@ -1080,6 +1096,7 @@ function JobTable({ jobs, selected, busy, lang, onSelect, onRetry }: {
               <td className="mono">{short(job.job_id)}</td>
               <td>{tAction(job.action, lang)}</td>
               <td><StatusBadge status={job.status} retryable={job.retryable} lang={lang} /></td>
+              <td className="mono">{job.retry_count || 0}</td>
               <td className="mono">{formatBeijingTime(job.updated_at, job.status)}</td>
               <td className="mono">{formatDuration(job.created_at, job.updated_at, job.status)}</td>
               <td>{tStep(job.last_step, lang) || '-'}</td>
@@ -1150,7 +1167,7 @@ function MailboxPanel({ mailboxes, selected, busy, showSecrets, oauthing, onSele
       <div className="tableWrap">
         <table>
           <thead>
-            <tr><th>邮箱</th><th>密码</th><th>类型</th><th>状态</th><th>Token</th><th>更新</th><th>错误</th><th>操作</th></tr>
+            <tr><th>邮箱</th><th>密码</th><th>类型</th><th>状态</th><th>失败</th><th>Token</th><th>更新</th><th>错误</th><th>操作</th></tr>
           </thead>
           <tbody>
             {mailboxes.map((mailbox) => {
@@ -1175,6 +1192,7 @@ function MailboxPanel({ mailboxes, selected, busy, showSecrets, oauthing, onSele
                   </td>
                   <td>{mailbox.is_primary ? '主邮箱' : 'Alias'}</td>
                   <td><StatusBadge status={mailbox.status} /></td>
+                  <td className="mono">{mailbox.fail_count || 0}</td>
                   <td><TokenBadge mailbox={mailbox} /></td>
                   <td>{formatUnix(mailbox.updated_at)}</td>
                   <td title={mailbox.last_error}>{compactToast(mailbox.last_error || '-')}</td>

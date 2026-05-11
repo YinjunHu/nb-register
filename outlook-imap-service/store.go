@@ -15,7 +15,8 @@ import (
 
 const selectMailbox = `
 	SELECT id, email, password, refresh_token, access_token, status,
-		last_error, is_primary, primary_email, created_at, updated_at
+		last_error, is_primary, primary_email, created_at, updated_at,
+		COALESCE(fail_count, 0)
 	FROM mailboxes
 `
 
@@ -31,6 +32,7 @@ type mailboxRow struct {
 	PrimaryEmail string
 	CreatedAt    int64
 	UpdatedAt    int64
+	FailCount    int32
 }
 
 type rowScanner interface {
@@ -96,6 +98,7 @@ func (s *MailboxStore) ensureSchema(ctx context.Context) error {
 		`ALTER TABLE mailboxes ADD COLUMN IF NOT EXISTS updated_at BIGINT NOT NULL DEFAULT EXTRACT(EPOCH FROM NOW())::BIGINT`,
 		`DROP INDEX IF EXISTS idx_mailboxes_assigned_account`,
 		`ALTER TABLE mailboxes DROP COLUMN IF EXISTS assigned_account_id`,
+		`ALTER TABLE mailboxes ADD COLUMN IF NOT EXISTS fail_count INTEGER NOT NULL DEFAULT 0`,
 		`CREATE INDEX IF NOT EXISTS idx_mailboxes_status ON mailboxes(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_mailboxes_primary ON mailboxes(primary_email)`,
 		`UPDATE mailboxes SET status = 'OAUTH_PENDING', last_error = ''
@@ -367,7 +370,11 @@ func (s *MailboxStore) MarkEmailStatus(ctx context.Context, email string, status
 	}
 	now := time.Now().Unix()
 	trimmedError := strings.TrimSpace(lastError)
-	if _, err := tx.Exec(ctx, "UPDATE mailboxes SET status = $1, last_error = $2, updated_at = $3 WHERE email = $4", status, trimmedError, now, email); err != nil {
+	failInc := ""
+	if status == statusAuthFailed || status == statusBlocked || status == statusUserAlreadyExists {
+		failInc = ", fail_count = COALESCE(fail_count,0) + 1"
+	}
+	if _, err := tx.Exec(ctx, "UPDATE mailboxes SET status = $1, last_error = $2, updated_at = $3"+failInc+" WHERE email = $4", status, trimmedError, now, email); err != nil {
 		return nil, err
 	}
 	if status == statusUserAlreadyExists {
@@ -476,6 +483,7 @@ func scanMailbox(scanner rowScanner) (*mailboxRow, error) {
 		&row.PrimaryEmail,
 		&row.CreatedAt,
 		&row.UpdatedAt,
+		&row.FailCount,
 	)
 	if err != nil {
 		return nil, err
@@ -498,5 +506,6 @@ func (m *mailboxRow) toProto() *pb.EmailMailbox {
 		PrimaryEmail: m.PrimaryEmail,
 		CreatedAt:    m.CreatedAt,
 		UpdatedAt:    m.UpdatedAt,
+		FailCount:    m.FailCount,
 	}
 }

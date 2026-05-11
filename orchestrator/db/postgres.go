@@ -19,6 +19,7 @@ type Job struct {
 	LastStep     string
 	ErrorMessage string
 	ResultJSON   string
+	RetryCount   int   `gorm:"default:0"`
 	CreatedAt    int64 `gorm:"autoCreateTime"`
 	UpdatedAt    int64 `gorm:"autoUpdateTime"`
 }

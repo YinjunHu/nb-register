@@ -607,6 +607,14 @@ def outlook_register(
     )
     os.makedirs(ss_dir, exist_ok=True)
 
+    _traffic = {"bytes": 0}
+
+    def _on_response(response):
+        try:
+            _traffic["bytes"] += len(response.body())
+        except Exception:
+            pass
+
     try:
         import platform as _plat
         headless = "virtual" if _plat.system() == "Linux" else False
@@ -617,6 +625,7 @@ def outlook_register(
             proxy=cf_proxy, geoip=True, locale="zh-CN",
         ) as ctx:
             page = ctx.pages[0] if ctx.pages else ctx.new_page()
+            page.on("response", _on_response)
 
             # [1] Open Outlook signup via prompt=create_account
             logger.info("[outlook] Opening signup...")
@@ -788,6 +797,7 @@ def outlook_register(
         except Exception:
             pass
 
+    result["traffic_bytes"] = _traffic["bytes"]
     return result
 
 
@@ -810,6 +820,7 @@ def main():
     result = outlook_register(proxy=args.proxy, email_prefix=args.prefix, email_suffix=args.suffix,
                               max_captcha_retries=args.max_retries)
 
+    traffic_mb = round(result.get("traffic_bytes", 0) / 1048576, 2)
     print("\n" + "=" * 50)
     if result["success"]:
         print(f"✅ Registration successful!")
@@ -827,7 +838,17 @@ def main():
     else:
         print(f"❌ Registration failed: {result['error']}")
         print(f"   Email:    {result['email']}")
+    print(f"   Traffic:  {traffic_mb} MB ({result.get('traffic_bytes', 0)} bytes)")
     print("=" * 50)
+
+    results_dir = args.results_dir or os.environ.get("OUTLOOK_REGISTER_RESULTS_DIR") or ""
+    if results_dir:
+        try:
+            tf = os.path.join(results_dir, "traffic_bytes.txt")
+            with open(tf, "w", encoding="utf-8") as f:
+                f.write(str(result.get("traffic_bytes", 0)))
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

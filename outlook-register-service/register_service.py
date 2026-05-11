@@ -64,6 +64,7 @@ class MailboxRegistrationService(mailbox_register_pb2_grpc.MailboxRegistrationSe
                 exit_code=int(result.get("exit_code", 1)),
                 error_message=error_message,
                 accounts=accounts,
+                traffic_bytes=int(result.get("traffic_bytes", 0)),
             )
         except Exception as err:
             logger.exception("mailbox registration failed")

@@ -45,6 +45,7 @@ type jobRow struct {
 	LastStep     string    `json:"last_step"`
 	ErrorMessage string    `json:"error_message"`
 	ResultJSON   string    `json:"result_json"`
+	RetryCount   int       `json:"retry_count"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	Steps        []stepRow `json:"steps,omitempty"`
@@ -132,6 +133,8 @@ func main() {
 		staticDir:          envDefault("STATIC_DIR", "web/dist"),
 	}
 
+	s.db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS retry_count INTEGER NOT NULL DEFAULT 0`)
+	s.db.ExecContext(ctx, `ALTER TABLE mailboxes ADD COLUMN IF NOT EXISTS fail_count INTEGER NOT NULL DEFAULT 0`)
 	s.initBatchTable(ctx)
 	s.resumeBatch()
 
@@ -150,6 +153,7 @@ func main() {
 	mux.HandleFunc("/api/workflows/activate", s.handleActivate)
 	mux.HandleFunc("/api/workflows/probe-plus-trial", s.handleProbePlusTrial)
 	mux.HandleFunc("/api/workflows/register-and-activate", s.handleRegisterAndActivate)
+	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/", s.handleStatic)
 
 	addr := envDefault("LISTEN_ADDR", ":8080")
@@ -219,13 +223,20 @@ func (s *server) handleMailboxes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, errors.New("status query parameter is required (e.g. AUTH_FAILED, BLOCKED)"))
 			return
 		}
-		result, err := s.db.ExecContext(r.Context(), `DELETE FROM mailboxes WHERE status = $1`, status)
+		minFail := queryInt(r, "min_fail_count", 0)
+		var result sql.Result
+		var err error
+		if minFail > 0 {
+			result, err = s.db.ExecContext(r.Context(), `DELETE FROM mailboxes WHERE status = $1 AND COALESCE(fail_count,0) >= $2`, status, minFail)
+		} else {
+			result, err = s.db.ExecContext(r.Context(), `DELETE FROM mailboxes WHERE status = $1`, status)
+		}
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 		n, _ := result.RowsAffected()
-		writeJSON(w, http.StatusOK, map[string]any{"deleted": n, "status": status})
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": n, "status": status, "min_fail_count": minFail})
 	case http.MethodGet:
 		limit := int32(queryInt(r, "limit", 100))
 		resp, err := s.emailClient.ListMailboxes(r.Context(), &pb.ListEmailMailboxesRequest{
@@ -747,6 +758,7 @@ func (s *server) retryJob(w http.ResponseWriter, r *http.Request, jobID string) 
 		writeError(w, http.StatusConflict, errors.New("only retryable failed jobs can be retried"))
 		return
 	}
+	s.db.ExecContext(r.Context(), `UPDATE jobs SET retry_count = COALESCE(retry_count,0) + 1 WHERE id = $1`, jobID)
 	if strings.TrimSpace(job.AccountID) == "" {
 		writeError(w, http.StatusBadRequest, errors.New("job account_id is empty"))
 		return
@@ -868,7 +880,7 @@ func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error
 		limit = 1000
 	}
 
-	query := `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE 1=1`
+	query := `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, COALESCE(retry_count,0), to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE 1=1`
 	args := []any{}
 	if value := strings.TrimSpace(r.URL.Query().Get("status")); value != "" {
 		args = append(args, value)
@@ -894,7 +906,7 @@ func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error
 	jobs := []jobRow{}
 	for rows.Next() {
 		var job jobRow
-		if err := rows.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		if err := rows.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.RetryCount, &job.CreatedAt, &job.UpdatedAt); err != nil {
 			return nil, err
 		}
 		jobs = append(jobs, job)
@@ -903,9 +915,9 @@ func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error
 }
 
 func (s *server) getJob(ctx context.Context, jobID string) (*jobRow, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE id = $1`, jobID)
+	row := s.db.QueryRowContext(ctx, `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, COALESCE(retry_count,0), to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE id = $1`, jobID)
 	var job jobRow
-	if err := row.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.CreatedAt, &job.UpdatedAt); err != nil {
+	if err := row.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.RetryCount, &job.CreatedAt, &job.UpdatedAt); err != nil {
 		return nil, err
 	}
 
@@ -923,6 +935,52 @@ func (s *server) getJob(ctx context.Context, jobID string) (*jobRow, error) {
 		job.Steps = append(job.Steps, step)
 	}
 	return &job, rows.Err()
+}
+
+func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	ctx := r.Context()
+	var totalJobs, successJobs, failedJobs int
+	var totalTraffic int64
+	rows, err := s.db.QueryContext(ctx, `SELECT status, result_json FROM jobs WHERE action = 'REGISTER_MAILBOX'`)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err)
+		return
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status, resultJSON string
+		if err := rows.Scan(&status, &resultJSON); err != nil {
+			continue
+		}
+		totalJobs++
+		if strings.HasPrefix(status, "COMPLETED") {
+			successJobs++
+		} else if strings.HasPrefix(status, "FAILED") {
+			failedJobs++
+		}
+		var parsed map[string]any
+		if json.Unmarshal([]byte(resultJSON), &parsed) == nil {
+			if tb, ok := parsed["traffic_bytes"]; ok {
+				switch v := tb.(type) {
+				case float64:
+					totalTraffic += int64(v)
+				case int64:
+					totalTraffic += v
+				}
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"total_registrations":  totalJobs,
+		"success_registrations": successJobs,
+		"failed_registrations": failedJobs,
+		"total_traffic_bytes":  totalTraffic,
+		"total_traffic_mb":     float64(totalTraffic) / 1048576.0,
+	})
 }
 
 func (s *server) handleStatic(w http.ResponseWriter, r *http.Request) {

@@ -391,6 +391,7 @@ func (s *orchestratorServer) RegisterMailboxAtomicActivity(ctx context.Context, 
 			data["exit_code"] = resp.GetExitCode()
 			data["error_message"] = resp.GetErrorMessage()
 			data["account_count"] = len(resp.GetAccounts())
+			data["traffic_bytes"] = resp.GetTrafficBytes()
 		}
 		output.Data = data
 		if callErr != nil {

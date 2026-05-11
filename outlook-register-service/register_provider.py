@@ -611,6 +611,15 @@ def run_registration_request_locked(enabled: bool, import_only: bool, email_pref
     after_records = collect_records(out_dir, include_password_only=True)
     records = new_or_updated_records(before_records, after_records)
 
+    traffic_bytes = 0
+    try:
+        tf = out_dir / "traffic_bytes.txt"
+        if tf.exists():
+            traffic_bytes = int(tf.read_text().strip())
+            tf.unlink(missing_ok=True)
+    except Exception:
+        pass
+
     error_message = ""
     if not records:
         if code != 0:
@@ -623,6 +632,7 @@ def run_registration_request_locked(enabled: bool, import_only: bool, email_pref
         "exit_code": code,
         "error_message": error_message,
         "accounts": [record_response(record) for record in records],
+        "traffic_bytes": traffic_bytes,
     }
 
 
