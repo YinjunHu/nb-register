@@ -33,10 +33,36 @@ BOT_PROTECTION_WAIT = 11  # seconds
 # ---------------------------------------------------------------------------
 
 def _gen_email_local(prefix: str = "") -> str:
-    prefix = re.sub(r"[^a-z0-9]", "", prefix.lower().strip())
-    if prefix:
+    import json as _json
+    cfg = None
+    if prefix.strip().startswith("{"):
+        try:
+            cfg = _json.loads(prefix.strip())
+        except _json.JSONDecodeError:
+            pass
+
+    if cfg is not None:
+        fixed = re.sub(r"[^a-zA-Z0-9]", "", str(cfg.get("prefix", "")))
+        min_len = max(1, int(cfg.get("min", 6)))
+        max_len = max(min_len, int(cfg.get("max", 10)))
+        charset = ""
+        if cfg.get("upper", False):
+            charset += string.ascii_uppercase
+        if cfg.get("lower", True):
+            charset += string.ascii_lowercase
+        if cfg.get("digit", True):
+            charset += string.digits
+        if not charset:
+            charset = string.ascii_lowercase + string.digits
+        rand_len = random.randint(min_len, max_len)
+        rand_part = "".join(random.choice(charset) for _ in range(rand_len))
+        return (fixed + rand_part)[:24]
+
+    plain = re.sub(r"[^a-z0-9]", "", prefix.lower().strip())
+    if plain:
         suffix = str(random.randint(100, 99999))
-        return (prefix + suffix)[:24]
+        return (plain + suffix)[:24]
+
     try:
         from faker import Faker
         fake = Faker("en_US")

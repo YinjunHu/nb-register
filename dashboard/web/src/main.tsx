@@ -157,7 +157,7 @@ function App() {
   const [showSecrets, setShowSecrets] = useState(false);
   const [mailboxRegistering, setMailboxRegistering] = useState(false);
   const [mailboxRegisterCount, setMailboxRegisterCount] = useState(1);
-  const [mailboxEmailPrefix, setMailboxEmailPrefix] = useState('');
+  const [mailboxEmailCfg, setMailboxEmailCfg] = useState({ prefix: '', min: 8, max: 12, upper: false, lower: true, digit: true });
   const [mailboxEmailSuffix, setMailboxEmailSuffix] = useState('@outlook.com');
   const [mailboxRegisterProgress, setMailboxRegisterProgress] = useState<{running: boolean; total: number; done: number; remaining: number; continuous: boolean; email_prefix?: string; email_suffix?: string}>({running: false, total: 0, done: 0, remaining: 0, continuous: false});
   const [mailboxOAuthing, setMailboxOAuthing] = useState('');
@@ -312,7 +312,8 @@ function App() {
   async function startMailboxRegistration(continuous = false) {
     setMailboxRegistering(true);
     try {
-      const resp = await api<{ started: boolean; count?: number; continuous?: boolean }>('/api/mailboxes/register', { method: 'POST', body: JSON.stringify(continuous ? { continuous: true, email_prefix: mailboxEmailPrefix, email_suffix: mailboxEmailSuffix } : { count: mailboxRegisterCount, email_prefix: mailboxEmailPrefix, email_suffix: mailboxEmailSuffix }) });
+      const emailPrefix = JSON.stringify(mailboxEmailCfg);
+      const resp = await api<{ started: boolean; count?: number; continuous?: boolean }>('/api/mailboxes/register', { method: 'POST', body: JSON.stringify(continuous ? { continuous: true, email_prefix: emailPrefix, email_suffix: mailboxEmailSuffix } : { count: mailboxRegisterCount, email_prefix: emailPrefix, email_suffix: mailboxEmailSuffix }) });
       const label = continuous ? '持续注册已启动' : `批量注册已启动 (${resp.count || 1} 个)`;
       setToast({ kind: resp.started ? 'ok' : 'error', text: resp.started ? label : '注册启动失败' });
       window.setTimeout(refresh, 3000);
@@ -563,11 +564,6 @@ function App() {
 	              <div className="panel mailboxRegisterPanel">
 	                <PanelHeader title="邮箱注册" icon={<Play size={16} />}>
 	                  <div className="headerControls">
-	                    <input type="text" placeholder="前缀(可选)" value={mailboxEmailPrefix} onChange={(e) => setMailboxEmailPrefix(e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20))} style={{ width: 100 }} disabled={busy || mailboxRegistering} title="邮箱前缀，留空则随机生成" />
-	                    <select value={mailboxEmailSuffix} onChange={(e) => setMailboxEmailSuffix(e.target.value)} disabled={busy || mailboxRegistering} style={{ width: 130 }}>
-	                      <option value="@outlook.com">@outlook.com</option>
-	                      <option value="@hotmail.com">@hotmail.com</option>
-	                    </select>
 	                    <input type="number" min={1} max={1000} value={mailboxRegisterCount} onChange={(e) => setMailboxRegisterCount(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} style={{ width: 56, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
 	                    <button className="primaryButton" onClick={() => startMailboxRegistration(false)} disabled={busy || mailboxRegistering}>
 	                      <Play size={16} /> 启动注册 ({mailboxRegisterCount})
@@ -585,6 +581,31 @@ function App() {
 	                    </button>
 	                  </div>
 	                </PanelHeader>
+	                <div style={{ padding: '10px 16px', background: 'var(--surface-1, #f6f8fa)', borderBottom: '1px solid var(--border, #e1e4e8)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+	                  <span style={{ fontWeight: 600 }}>邮箱生成规则:</span>
+	                  <input type="text" placeholder="固定前缀(可选)" value={mailboxEmailCfg.prefix} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, prefix: e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 14) })} style={{ width: 110 }} disabled={busy || mailboxRegistering} title="固定前缀，拼接在随机部分之前" />
+	                  <span>+</span>
+	                  <label style={{ display: 'flex', alignItems: 'center', gap: 3 }} title="随机部分最短长度">
+	                    <span>长度</span>
+	                    <input type="number" min={1} max={20} value={mailboxEmailCfg.min} onChange={(e) => { const v = Math.max(1, Math.min(20, Number(e.target.value) || 1)); setMailboxEmailCfg({ ...mailboxEmailCfg, min: v, max: Math.max(v, mailboxEmailCfg.max) }); }} style={{ width: 42, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
+	                    <span>-</span>
+	                    <input type="number" min={1} max={20} value={mailboxEmailCfg.max} onChange={(e) => { const v = Math.max(mailboxEmailCfg.min, Math.min(20, Number(e.target.value) || 1)); setMailboxEmailCfg({ ...mailboxEmailCfg, max: v }); }} style={{ width: 42, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
+	                  </label>
+	                  <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+	                    <input type="checkbox" checked={mailboxEmailCfg.upper} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, upper: e.target.checked })} disabled={busy || mailboxRegistering} /> A-Z
+	                  </label>
+	                  <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+	                    <input type="checkbox" checked={mailboxEmailCfg.lower} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, lower: e.target.checked })} disabled={busy || mailboxRegistering} /> a-z
+	                  </label>
+	                  <label style={{ display: 'flex', alignItems: 'center', gap: 3, cursor: 'pointer' }}>
+	                    <input type="checkbox" checked={mailboxEmailCfg.digit} onChange={(e) => setMailboxEmailCfg({ ...mailboxEmailCfg, digit: e.target.checked })} disabled={busy || mailboxRegistering} /> 0-9
+	                  </label>
+	                  <select value={mailboxEmailSuffix} onChange={(e) => setMailboxEmailSuffix(e.target.value)} disabled={busy || mailboxRegistering} style={{ width: 130 }}>
+	                    <option value="@outlook.com">@outlook.com</option>
+	                    <option value="@hotmail.com">@hotmail.com</option>
+	                  </select>
+	                  <span style={{ opacity: 0.6 }}>示例: {mailboxEmailCfg.prefix || ''}{'x'.repeat(mailboxEmailCfg.min)}{mailboxEmailCfg.min < mailboxEmailCfg.max ? '...' : ''}{mailboxEmailSuffix}</span>
+	                </div>
 	                {mailboxRegisterProgress.running && (
 	                  <div style={{ padding: '8px 16px', background: 'var(--surface-1, #f6f8fa)', borderBottom: '1px solid var(--border, #e1e4e8)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
 	                    <strong>{mailboxRegisterProgress.continuous ? '持续注册:' : '批量进度:'}</strong>
@@ -595,7 +616,7 @@ function App() {
 	                      </div>
 	                    )}
 	                    {!mailboxRegisterProgress.continuous && <span style={{ opacity: 0.7 }}>剩余 {mailboxRegisterProgress.remaining}</span>}
-	                    {(mailboxRegisterProgress.email_prefix || mailboxRegisterProgress.email_suffix) && <span style={{ opacity: 0.7, marginLeft: 8 }}>格式: {mailboxRegisterProgress.email_prefix || '*'}{mailboxRegisterProgress.email_suffix || '@outlook.com'}</span>}
+	                    {mailboxRegisterProgress.email_suffix && <span style={{ opacity: 0.7, marginLeft: 8 }}>域名: {mailboxRegisterProgress.email_suffix}</span>}
 	                  </div>
 	                )}
 	                <div className="mailboxRegisterBody">
