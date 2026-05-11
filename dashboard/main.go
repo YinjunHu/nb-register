@@ -213,6 +213,19 @@ func (s *server) handleAccounts(w http.ResponseWriter, r *http.Request) {
 
 func (s *server) handleMailboxes(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
+	case http.MethodDelete:
+		status := r.URL.Query().Get("status")
+		if status == "" {
+			writeError(w, http.StatusBadRequest, errors.New("status query parameter is required (e.g. AUTH_FAILED, BLOCKED)"))
+			return
+		}
+		result, err := s.db.ExecContext(r.Context(), `DELETE FROM mailboxes WHERE status = $1`, status)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		n, _ := result.RowsAffected()
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": n, "status": status})
 	case http.MethodGet:
 		limit := int32(queryInt(r, "limit", 100))
 		resp, err := s.emailClient.ListMailboxes(r.Context(), &pb.ListEmailMailboxesRequest{
@@ -631,16 +644,32 @@ func (s *server) handleAccount(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) handleJobs(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		jobs, err := s.listJobs(r.Context(), r)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, jobs)
+	case http.MethodDelete:
+		status := r.URL.Query().Get("status")
+		if status == "" {
+			writeError(w, http.StatusBadRequest, errors.New("status query parameter is required (e.g. FAILED, FAILED_RETRYABLE)"))
+			return
+		}
+		// delete steps first, then jobs
+		s.db.ExecContext(r.Context(), `DELETE FROM job_steps WHERE job_id IN (SELECT id FROM jobs WHERE status = $1)`, status)
+		result, err := s.db.ExecContext(r.Context(), `DELETE FROM jobs WHERE status = $1`, status)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		n, _ := result.RowsAffected()
+		writeJSON(w, http.StatusOK, map[string]any{"deleted": n, "status": status})
+	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
 	}
-	jobs, err := s.listJobs(r.Context(), r)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, jobs)
 }
 
 func (s *server) handleJob(w http.ResponseWriter, r *http.Request) {

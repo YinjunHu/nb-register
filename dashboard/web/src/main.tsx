@@ -252,6 +252,34 @@ function App() {
     }
   }
 
+  async function bulkDeleteMailboxes(status: string) {
+    setBusy(true);
+    try {
+      const resp = await api<{ deleted: number; status: string }>(`/api/mailboxes?status=${encodeURIComponent(status)}`, { method: 'DELETE' });
+      setToast({ kind: 'ok', text: `已删除 ${resp.deleted} 个 ${status} 邮箱` });
+      if (selectedMailbox?.status === status) setSelectedMailbox(null);
+      await refresh();
+    } catch (err) {
+      setToast({ kind: 'error', text: errorText(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function bulkDeleteJobs(status: string) {
+    setBusy(true);
+    try {
+      const resp = await api<{ deleted: number; status: string }>(`/api/jobs?status=${encodeURIComponent(status)}`, { method: 'DELETE' });
+      setToast({ kind: 'ok', text: `已删除 ${resp.deleted} 条 ${status} 工作流` });
+      if (selectedJob?.status === status) setSelectedJob(null);
+      await refresh();
+    } catch (err) {
+      setToast({ kind: 'error', text: errorText(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function retryJob(job: Job) {
     setBusy(true);
     try {
@@ -521,6 +549,9 @@ function App() {
                     <button className="secondaryButton" onClick={() => runMailboxOAuth()} disabled={busy || !!mailboxOAuthing || missingOAuthCount === 0}>
                       <KeyRound size={16} /> 补 OAuth {missingOAuthCount > 0 ? `(${missingOAuthCount})` : ''}
                     </button>
+                    <button className="dangerButton" onClick={() => { if (confirm('确定删除所有 AUTH_FAILED 和 BLOCKED 邮箱？')) { bulkDeleteMailboxes('AUTH_FAILED'); bulkDeleteMailboxes('BLOCKED'); } }} disabled={busy} title="删除所有认证失败和被锁定的邮箱">
+                      <Trash2 size={16} /> 清理失败邮箱
+                    </button>
                     <button className="secondaryButton" onClick={() => setShowSecrets((v) => !v)}>
                       {showSecrets ? <EyeOff size={16} /> : <Eye size={16} />}
                       {showSecrets ? '隐藏' : '显示'}
@@ -727,9 +758,14 @@ POST ${location.origin}/api/mailboxes/register
             <section className="workspace jobsWorkspace">
               <div className="panel jobsPanel">
                 <PanelHeader title="工作流" icon={<Activity size={16} />}>
-                  <select value={jobStatus} onChange={(e) => setJobStatus(e.target.value)}>
-                    {jobStatusOptions.map((s) => <option key={s} value={s}>{s ? tStatus(s, lang) : '全部状态'}</option>)}
-                  </select>
+                  <div className="headerControls">
+                    <button className="dangerButton" onClick={() => { if (confirm('确定删除所有失败的工作流记录？')) { bulkDeleteJobs('FAILED'); bulkDeleteJobs('FAILED_RETRYABLE'); } }} disabled={busy} title="删除所有失败工作流">
+                      <Trash2 size={16} /> 清理失败记录
+                    </button>
+                    <select value={jobStatus} onChange={(e) => setJobStatus(e.target.value)}>
+                      {jobStatusOptions.map((s) => <option key={s} value={s}>{s ? tStatus(s, lang) : '全部状态'}</option>)}
+                    </select>
+                  </div>
                 </PanelHeader>
                 <JobTable jobs={jobs} selected={selectedJob?.job_id} busy={busy} lang={lang} onSelect={selectJob} onRetry={retryJob} />
               </div>
