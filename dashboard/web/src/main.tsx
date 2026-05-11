@@ -1091,15 +1091,19 @@ function JobTable({ jobs, selected, busy, lang, onSelect, onRetry }: {
     <div className="tableWrap">
       <table>
         <thead>
-          <tr><th>Job</th><th>动作</th><th>状态</th><th>重试</th><th>完成时间</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
+          <tr><th>Job</th><th>动作</th><th>状态</th><th>重试</th><th>流量</th><th>完成时间</th><th>耗时</th><th>步骤</th><th>操作</th></tr>
         </thead>
         <tbody>
-          {jobs.map((job) => (
+          {jobs.map((job) => {
+            let trafficMB = '';
+            try { const r = JSON.parse(job.result_json || '{}'); if (r.traffic_bytes > 0) trafficMB = (r.traffic_bytes / 1048576).toFixed(2) + ' MB'; } catch {}
+            return (
             <tr key={job.job_id} className={selected === job.job_id ? 'selected' : ''} onClick={() => onSelect(job)}>
               <td className="mono">{short(job.job_id)}</td>
               <td>{tAction(job.action, lang)}</td>
               <td><StatusBadge status={job.status} retryable={job.retryable} lang={lang} /></td>
               <td className="mono">{job.retry_count || 0}</td>
+              <td className="mono">{trafficMB || '-'}</td>
               <td className="mono">{formatBeijingTime(job.updated_at, job.status)}</td>
               <td className="mono">{formatDuration(job.created_at, job.updated_at, job.status)}</td>
               <td>{tStep(job.last_step, lang) || '-'}</td>
@@ -1115,7 +1119,8 @@ function JobTable({ jobs, selected, busy, lang, onSelect, onRetry }: {
                 </div>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>
