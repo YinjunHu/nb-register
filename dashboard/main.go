@@ -46,6 +46,7 @@ type jobRow struct {
 	ErrorMessage string    `json:"error_message"`
 	ResultJSON   string    `json:"result_json"`
 	RetryCount   int       `json:"retry_count"`
+	TrafficBytes int64     `json:"traffic_bytes"`
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
 	Steps        []stepRow `json:"steps,omitempty"`
@@ -880,7 +881,7 @@ func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error
 		limit = 1000
 	}
 
-	query := `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, COALESCE(retry_count,0), to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE 1=1`
+	query := `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, COALESCE(retry_count,0), COALESCE((SELECT (s.result_json::jsonb->>'traffic_bytes')::bigint FROM job_steps s WHERE s.job_id = jobs.id ORDER BY s.completed_at DESC LIMIT 1), 0), to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE 1=1`
 	args := []any{}
 	if value := strings.TrimSpace(r.URL.Query().Get("status")); value != "" {
 		args = append(args, value)
@@ -906,7 +907,7 @@ func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error
 	jobs := []jobRow{}
 	for rows.Next() {
 		var job jobRow
-		if err := rows.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.RetryCount, &job.CreatedAt, &job.UpdatedAt); err != nil {
+		if err := rows.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.RetryCount, &job.TrafficBytes, &job.CreatedAt, &job.UpdatedAt); err != nil {
 			return nil, err
 		}
 		jobs = append(jobs, job)
@@ -915,9 +916,9 @@ func (s *server) listJobs(ctx context.Context, r *http.Request) ([]jobRow, error
 }
 
 func (s *server) getJob(ctx context.Context, jobID string) (*jobRow, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, COALESCE(retry_count,0), to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE id = $1`, jobID)
+	row := s.db.QueryRowContext(ctx, `SELECT id, account_id, action, status, recoverable, retryable, last_step, error_message, result_json, COALESCE(retry_count,0), COALESCE((SELECT (s.result_json::jsonb->>'traffic_bytes')::bigint FROM job_steps s WHERE s.job_id = jobs.id ORDER BY s.completed_at DESC LIMIT 1), 0), to_timestamp(created_at), to_timestamp(updated_at) FROM jobs WHERE id = $1`, jobID)
 	var job jobRow
-	if err := row.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.RetryCount, &job.CreatedAt, &job.UpdatedAt); err != nil {
+	if err := row.Scan(&job.JobID, &job.AccountID, &job.Action, &job.Status, &job.Recoverable, &job.Retryable, &job.LastStep, &job.ErrorMessage, &job.ResultJSON, &job.RetryCount, &job.TrafficBytes, &job.CreatedAt, &job.UpdatedAt); err != nil {
 		return nil, err
 	}
 

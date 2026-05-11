@@ -47,6 +47,7 @@ type Job = {
   error_message: string;
   result_json: string;
   retry_count: number;
+  traffic_bytes: number;
   created_at: string;
   updated_at: string;
   steps?: Step[];
@@ -1095,8 +1096,7 @@ function JobTable({ jobs, selected, busy, lang, onSelect, onRetry }: {
         </thead>
         <tbody>
           {jobs.map((job) => {
-            let trafficMB = '';
-            try { const r = JSON.parse(job.result_json || '{}'); if (r.traffic_bytes > 0) trafficMB = (r.traffic_bytes / 1048576).toFixed(2) + ' MB'; } catch {}
+            const trafficMB = job.traffic_bytes > 0 ? (job.traffic_bytes / 1048576).toFixed(2) + ' MB' : '';
             return (
             <tr key={job.job_id} className={selected === job.job_id ? 'selected' : ''} onClick={() => onSelect(job)}>
               <td className="mono">{short(job.job_id)}</td>
