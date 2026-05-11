@@ -264,6 +264,7 @@ func (s *orchestratorServer) runAtomicStep(ctx context.Context, jobID, stepName 
 			"retryable":     retryable,
 			"last_step":     stepName,
 			"error_message": errorMessage,
+			"result_json":   resultJSON,
 		}).Error; err != nil {
 			log.Printf("[orchestrator] update failed job failed job=%s step=%s: %v", jobID, stepName, err)
 		}

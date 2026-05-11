@@ -945,31 +945,43 @@ func (s *server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	var totalJobs, successJobs, failedJobs int
 	var totalTraffic int64
-	rows, err := s.db.QueryContext(ctx, `SELECT status, result_json FROM jobs WHERE action = 'REGISTER_MAILBOX'`)
+	// Count jobs
+	jobRows, err := s.db.QueryContext(ctx, `SELECT status FROM jobs WHERE action = 'REGISTER_MAILBOX'`)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err)
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var status, resultJSON string
-		if err := rows.Scan(&status, &resultJSON); err != nil {
+	defer jobRows.Close()
+	for jobRows.Next() {
+		var status string
+		if err := jobRows.Scan(&status); err != nil {
 			continue
 		}
 		totalJobs++
-		if strings.HasPrefix(status, "COMPLETED") {
+		if strings.HasPrefix(status, "COMPLETED") || status == "SUCCEEDED" {
 			successJobs++
 		} else if strings.HasPrefix(status, "FAILED") {
 			failedJobs++
 		}
-		var parsed map[string]any
-		if json.Unmarshal([]byte(resultJSON), &parsed) == nil {
-			if tb, ok := parsed["traffic_bytes"]; ok {
-				switch v := tb.(type) {
-				case float64:
-					totalTraffic += int64(v)
-				case int64:
-					totalTraffic += v
+	}
+	// Sum traffic from step-level result_json (always populated, unlike job-level)
+	stepRows, err := s.db.QueryContext(ctx, `SELECT s.result_json FROM job_steps s JOIN jobs j ON s.job_id = j.id WHERE j.action = 'REGISTER_MAILBOX' AND s.step_name = 'register_mailbox'`)
+	if err == nil {
+		defer stepRows.Close()
+		for stepRows.Next() {
+			var resultJSON string
+			if err := stepRows.Scan(&resultJSON); err != nil {
+				continue
+			}
+			var parsed map[string]any
+			if json.Unmarshal([]byte(resultJSON), &parsed) == nil {
+				if tb, ok := parsed["traffic_bytes"]; ok {
+					switch v := tb.(type) {
+					case float64:
+						totalTraffic += int64(v)
+					case int64:
+						totalTraffic += v
+					}
 				}
 			}
 		}
