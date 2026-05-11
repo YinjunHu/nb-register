@@ -110,10 +110,14 @@ const ZH_ERROR_PATTERNS: [RegExp, string][] = [
   [/Page\.screenshot.*Timeout/i, '页面截图超时（网络加载缓慢）'],
   [/Timeout (\d+)ms exceeded/, '操作超时（$1ms）'],
   [/OAuth.*timed out/i, 'OAuth 认证超时'],
-  [/mailbox OAuth failed:\s*(\d+)\/(\d+)/, '邮箱 OAuth 失败: $1/$2'],
   [/mailbox registration is disabled/, '邮箱注册已禁用'],
   [/registration already running/, '已有注册任务在运行'],
   [/no mailbox records found to import/, '未找到可导入的邮箱记录'],
+  [/Failed to get IP address/, '代理获取公网 IP 失败（代理不通）'],
+  [/primary mailbox is not pollable.*status=AUTH_FAILED/, '主邮箱认证失效，无法收取邮件'],
+  [/mailbox OAuth failed:\s*(\d+)\/(\d+)/, '邮箱 OAuth 失败（$1/$2）'],
+  [/registered mailbox has no OAuth refresh token/, '已注册邮箱缺少 OAuth 令牌'],
+  [/Registration failed/, '注册失败'],
 ];
 
 function tStatus(status: string, lang: Lang): string {
@@ -224,6 +228,20 @@ function App() {
       await api<any>(`/api/accounts/${account.account_id}`, { method: 'DELETE' });
       if (selectedAccount?.account_id === account.account_id) setSelectedAccount(null);
       setToast({ kind: 'ok', text: '账号已删除' });
+      await refresh();
+    } catch (err) {
+      setToast({ kind: 'error', text: errorText(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteMailbox(email: string) {
+    setBusy(true);
+    try {
+      await api<any>(`/api/mailboxes/${encodeURIComponent(email)}`, { method: 'DELETE' });
+      if (selectedMailbox?.email_address === email) setSelectedMailbox(null);
+      setToast({ kind: 'ok', text: `邮箱 ${email} 已删除` });
       await refresh();
     } catch (err) {
       setToast({ kind: 'error', text: errorText(err) });
@@ -718,7 +736,7 @@ POST ${location.origin}/api/mailboxes/register
 
       <DetailDrawer open={!!selectedMailbox} title="邮箱详情" onClose={closeDetails}>
         {selectedMailbox && (
-          <MailboxDetails mailbox={selectedMailbox} showSecrets={showSecrets} />
+          <MailboxDetails mailbox={selectedMailbox} showSecrets={showSecrets} lang={lang} onDelete={deleteMailbox} />
         )}
       </DetailDrawer>
     </main>
@@ -1183,24 +1201,31 @@ function MailboxStatusStrip({ mailboxes }: { mailboxes: Mailbox[] }) {
   );
 }
 
-function MailboxDetails({ mailbox, showSecrets }: {
+function MailboxDetails({ mailbox, showSecrets, lang, onDelete }: {
   mailbox: Mailbox;
   showSecrets: boolean;
+  lang: Lang;
+  onDelete: (email: string) => void;
 }) {
   return (
     <div className="details">
       <section>
-        <h3>邮箱</h3>
+        <div className="sectionTitle">
+          <h3>邮箱</h3>
+          <button className="dangerButton" onClick={() => { if (confirm(`确定删除邮箱 ${mailbox.email_address} 及其别名？`)) onDelete(mailbox.email_address); }} title="删除邮箱">
+            <Trash2 size={14} /> 删除
+          </button>
+        </div>
         <KV label="Email" value={showSecrets ? mailbox.email_address : maskEmail(mailbox.email_address)} />
-        <KV label="Password" value={showSecrets ? mailbox.password : mask(mailbox.password)} mono />
-        <KV label="Status" value={mailbox.status || '-'} />
-        <KV label="Type" value={mailbox.is_primary ? '主邮箱' : 'Alias'} />
-        <KV label="Primary" value={mailbox.primary_email || '-'} />
-        <KV label="Refresh" value={showSecrets ? mailbox.refresh_token : mask(mailbox.refresh_token)} mono />
-        <KV label="Access" value={showSecrets ? mailbox.access_token : mask(mailbox.access_token)} mono />
-        <KV label="Created" value={formatUnix(mailbox.created_at)} />
-        <KV label="Updated" value={formatUnix(mailbox.updated_at)} />
-        <KV label="Error" value={mailbox.last_error || '-'} />
+        <KV label={lang === 'zh' ? '密码' : 'Password'} value={showSecrets ? mailbox.password : mask(mailbox.password)} mono />
+        <KV label={lang === 'zh' ? '状态' : 'Status'} value={tStatus(mailbox.status, lang) || '-'} />
+        <KV label={lang === 'zh' ? '类型' : 'Type'} value={mailbox.is_primary ? '主邮箱' : 'Alias'} />
+        <KV label={lang === 'zh' ? '主邮箱' : 'Primary'} value={mailbox.primary_email || '-'} />
+        <KV label="Refresh Token" value={showSecrets ? mailbox.refresh_token : mask(mailbox.refresh_token)} mono />
+        <KV label="Access Token" value={showSecrets ? mailbox.access_token : mask(mailbox.access_token)} mono />
+        <KV label={lang === 'zh' ? '创建时间' : 'Created'} value={formatUnix(mailbox.created_at)} />
+        <KV label={lang === 'zh' ? '更新时间' : 'Updated'} value={formatUnix(mailbox.updated_at)} />
+        <KV label={lang === 'zh' ? '错误' : 'Error'} value={tError(mailbox.last_error, lang) || '-'} />
       </section>
     </div>
   );

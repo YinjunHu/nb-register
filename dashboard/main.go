@@ -142,6 +142,7 @@ func main() {
 	mux.HandleFunc("/api/mailboxes/register", s.handleMailboxRegister)
 	mux.HandleFunc("/api/mailboxes/oauth", s.handleMailboxOAuth)
 	mux.HandleFunc("/api/mailboxes/wait-otp", s.handleMailboxWaitOTP)
+	mux.HandleFunc("/api/mailboxes/", s.handleMailbox)
 	mux.HandleFunc("/api/mailboxes", s.handleMailboxes)
 	mux.HandleFunc("/api/jobs", s.handleJobs)
 	mux.HandleFunc("/api/jobs/", s.handleJob)
@@ -248,6 +249,43 @@ func (s *server) handleMailboxes(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSON(w, http.StatusCreated, resp.GetMailbox())
+	default:
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *server) handleMailbox(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/mailboxes/")
+	switch path {
+	case "register", "oauth", "wait-otp":
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	if strings.Contains(path, "/") {
+		w.WriteHeader(http.StatusNotFound)
+		return
+	}
+	email := path
+	if email == "" {
+		writeError(w, http.StatusBadRequest, errors.New("email is required"))
+		return
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		result, err := s.db.ExecContext(r.Context(), `DELETE FROM mailboxes WHERE email = $1`, email)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err)
+			return
+		}
+		n, _ := result.RowsAffected()
+		if n == 0 {
+			writeError(w, http.StatusNotFound, errors.New("mailbox not found"))
+			return
+		}
+		// also delete aliases
+		s.db.ExecContext(r.Context(), `DELETE FROM mailboxes WHERE primary_email = $1 AND is_primary = false`, email)
+		writeJSON(w, http.StatusOK, map[string]string{"deleted": email})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
