@@ -684,8 +684,10 @@ func (s *orchestratorServer) RegisterMailbox(ctx context.Context, req *pb.Regist
 	jobID := uuid.NewString()
 	var result RegisterMailboxWorkflowResult
 	run, err := s.temporal.ExecuteWorkflow(ctx, s.workflowOptions("register-mailbox-"+jobID), RegisterMailboxWorkflow, RegisterMailboxWorkflowInput{
-		JobID:      jobID,
-		ImportOnly: req.GetImportOnly(),
+		JobID:       jobID,
+		ImportOnly:  req.GetImportOnly(),
+		EmailPrefix: req.GetEmailPrefix(),
+		EmailSuffix: req.GetEmailSuffix(),
 	})
 	if err != nil {
 		return nil, err

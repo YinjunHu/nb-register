@@ -262,7 +262,7 @@ def write_register_config(path: Path, proxy: str = "") -> None:
     logger.info("wrote OutlookRegister config to %s", config_path)
 
 
-def run_outlook_register(path: Path, proxy: str = "") -> int:
+def run_outlook_register(path: Path, proxy: str = "", email_prefix: str = "", email_suffix: str = "") -> int:
     script_path = Path("/app/camoufox_register.py")
     if not script_path.exists():
         logger.warning(f"Camoufox script not found at {script_path}, looking in current dir")
@@ -282,6 +282,10 @@ def run_outlook_register(path: Path, proxy: str = "") -> int:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
     env.update(proxy_env(proxy))
+    if email_prefix:
+        env["OUTLOOK_REGISTER_EMAIL_PREFIX"] = email_prefix
+    if email_suffix:
+        env["OUTLOOK_REGISTER_EMAIL_SUFFIX"] = email_suffix
     process = subprocess.Popen(command, cwd="/app", env=env, start_new_session=True)
     try:
         code = process.wait(timeout=timeout if timeout > 0 else None)
@@ -573,7 +577,7 @@ def run_once() -> int:
         return env_int("OUTLOOK_REGISTER_LOCK_BUSY_EXIT_CODE", 1)
 
 
-def run_registration_request_locked(enabled: bool, import_only: bool) -> dict:
+def run_registration_request_locked(enabled: bool, import_only: bool, email_prefix: str = "", email_suffix: str = "") -> dict:
     path = repo_dir()
     out_dir = results_dir()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -603,7 +607,7 @@ def run_registration_request_locked(enabled: bool, import_only: bool) -> dict:
 
     proxy = next_proxy()
     write_register_config(path, proxy=proxy)
-    code = run_outlook_register(path, proxy=proxy)
+    code = run_outlook_register(path, proxy=proxy, email_prefix=email_prefix, email_suffix=email_suffix)
     after_records = collect_records(out_dir, include_password_only=True)
     records = new_or_updated_records(before_records, after_records)
 
@@ -622,10 +626,10 @@ def run_registration_request_locked(enabled: bool, import_only: bool) -> dict:
     }
 
 
-def run_registration_request(enabled: bool, import_only: bool) -> dict:
+def run_registration_request(enabled: bool, import_only: bool, email_prefix: str = "", email_suffix: str = "") -> dict:
     try:
         with registration_lock():
-            return run_registration_request_locked(enabled=enabled, import_only=import_only)
+            return run_registration_request_locked(enabled=enabled, import_only=import_only, email_prefix=email_prefix, email_suffix=email_suffix)
     except RegistrationAlreadyRunning as exc:
         logger.warning("%s", exc)
         return {

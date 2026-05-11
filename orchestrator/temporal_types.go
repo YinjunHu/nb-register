@@ -106,9 +106,11 @@ type JobSuccessInput struct {
 }
 
 type MailboxRegistrationActivityInput struct {
-	JobID      string
-	Enabled    bool
-	ImportOnly bool
+	JobID       string
+	Enabled     bool
+	ImportOnly  bool
+	EmailPrefix string
+	EmailSuffix string
 }
 
 type MailboxRegistrationActivityOutput struct {
@@ -203,8 +205,10 @@ type RegisterAndActivateWorkflowResult struct {
 }
 
 type RegisterMailboxWorkflowInput struct {
-	JobID      string
-	ImportOnly bool
+	JobID       string
+	ImportOnly  bool
+	EmailPrefix string
+	EmailSuffix string
 }
 
 type RegisterMailboxWorkflowResult struct {

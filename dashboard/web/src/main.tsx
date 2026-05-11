@@ -157,7 +157,9 @@ function App() {
   const [showSecrets, setShowSecrets] = useState(false);
   const [mailboxRegistering, setMailboxRegistering] = useState(false);
   const [mailboxRegisterCount, setMailboxRegisterCount] = useState(1);
-  const [mailboxRegisterProgress, setMailboxRegisterProgress] = useState<{running: boolean; total: number; done: number; remaining: number; continuous: boolean}>({running: false, total: 0, done: 0, remaining: 0, continuous: false});
+  const [mailboxEmailPrefix, setMailboxEmailPrefix] = useState('');
+  const [mailboxEmailSuffix, setMailboxEmailSuffix] = useState('@outlook.com');
+  const [mailboxRegisterProgress, setMailboxRegisterProgress] = useState<{running: boolean; total: number; done: number; remaining: number; continuous: boolean; email_prefix?: string; email_suffix?: string}>({running: false, total: 0, done: 0, remaining: 0, continuous: false});
   const [mailboxOAuthing, setMailboxOAuthing] = useState('');
   const [runningAccountIds, setRunningAccountIds] = useState<Set<string>>(new Set());
   const [runningJobCount, setRunningJobCount] = useState(0);
@@ -310,7 +312,7 @@ function App() {
   async function startMailboxRegistration(continuous = false) {
     setMailboxRegistering(true);
     try {
-      const resp = await api<{ started: boolean; count?: number; continuous?: boolean }>('/api/mailboxes/register', { method: 'POST', body: JSON.stringify(continuous ? { continuous: true } : { count: mailboxRegisterCount }) });
+      const resp = await api<{ started: boolean; count?: number; continuous?: boolean }>('/api/mailboxes/register', { method: 'POST', body: JSON.stringify(continuous ? { continuous: true, email_prefix: mailboxEmailPrefix, email_suffix: mailboxEmailSuffix } : { count: mailboxRegisterCount, email_prefix: mailboxEmailPrefix, email_suffix: mailboxEmailSuffix }) });
       const label = continuous ? '持续注册已启动' : `批量注册已启动 (${resp.count || 1} 个)`;
       setToast({ kind: resp.started ? 'ok' : 'error', text: resp.started ? label : '注册启动失败' });
       window.setTimeout(refresh, 3000);
@@ -561,6 +563,11 @@ function App() {
 	              <div className="panel mailboxRegisterPanel">
 	                <PanelHeader title="邮箱注册" icon={<Play size={16} />}>
 	                  <div className="headerControls">
+	                    <input type="text" placeholder="前缀(可选)" value={mailboxEmailPrefix} onChange={(e) => setMailboxEmailPrefix(e.target.value.replace(/[^a-zA-Z0-9]/g, '').slice(0, 20))} style={{ width: 100 }} disabled={busy || mailboxRegistering} title="邮箱前缀，留空则随机生成" />
+	                    <select value={mailboxEmailSuffix} onChange={(e) => setMailboxEmailSuffix(e.target.value)} disabled={busy || mailboxRegistering} style={{ width: 130 }}>
+	                      <option value="@outlook.com">@outlook.com</option>
+	                      <option value="@hotmail.com">@hotmail.com</option>
+	                    </select>
 	                    <input type="number" min={1} max={1000} value={mailboxRegisterCount} onChange={(e) => setMailboxRegisterCount(Math.max(1, Math.min(1000, Number(e.target.value) || 1)))} style={{ width: 56, textAlign: 'center' }} disabled={busy || mailboxRegistering} />
 	                    <button className="primaryButton" onClick={() => startMailboxRegistration(false)} disabled={busy || mailboxRegistering}>
 	                      <Play size={16} /> 启动注册 ({mailboxRegisterCount})
@@ -588,6 +595,7 @@ function App() {
 	                      </div>
 	                    )}
 	                    {!mailboxRegisterProgress.continuous && <span style={{ opacity: 0.7 }}>剩余 {mailboxRegisterProgress.remaining}</span>}
+	                    {(mailboxRegisterProgress.email_prefix || mailboxRegisterProgress.email_suffix) && <span style={{ opacity: 0.7, marginLeft: 8 }}>格式: {mailboxRegisterProgress.email_prefix || '*'}{mailboxRegisterProgress.email_suffix || '@outlook.com'}</span>}
 	                  </div>
 	                )}
 	                <div className="mailboxRegisterBody">

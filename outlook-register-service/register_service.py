@@ -42,6 +42,8 @@ class MailboxRegistrationService(mailbox_register_pb2_grpc.MailboxRegistrationSe
             result = register_provider.run_registration_request(
                 enabled=bool(request.enabled),
                 import_only=bool(request.import_only),
+                email_prefix=str(getattr(request, 'email_prefix', '') or ''),
+                email_suffix=str(getattr(request, 'email_suffix', '') or ''),
             )
             accounts = [
                 mailbox_register_pb2.MailboxRegistrationAccount(

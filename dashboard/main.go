@@ -306,22 +306,26 @@ func (s *server) initBatchTable(ctx context.Context) {
 	if err != nil {
 		log.Fatalf("create batch_registration table: %v", err)
 	}
-	// add continuous column if upgrading from older schema
+	// add columns if upgrading from older schema
 	s.db.ExecContext(ctx, `ALTER TABLE batch_registration ADD COLUMN IF NOT EXISTS continuous BOOLEAN NOT NULL DEFAULT FALSE`)
+	s.db.ExecContext(ctx, `ALTER TABLE batch_registration ADD COLUMN IF NOT EXISTS email_prefix TEXT NOT NULL DEFAULT ''`)
+	s.db.ExecContext(ctx, `ALTER TABLE batch_registration ADD COLUMN IF NOT EXISTS email_suffix TEXT NOT NULL DEFAULT ''`)
 }
 
 type batchState struct {
-	ID         int
-	Total      int
-	Done       int
-	Cancelled  bool
-	Continuous bool
+	ID          int
+	Total       int
+	Done        int
+	Cancelled   bool
+	Continuous  bool
+	EmailPrefix string
+	EmailSuffix string
 }
 
 func (s *server) loadActiveBatch() *batchState {
-	row := s.db.QueryRow(`SELECT id, total, done, cancelled, continuous FROM batch_registration WHERE cancelled = FALSE AND (done < total OR continuous = TRUE) ORDER BY id DESC LIMIT 1`)
+	row := s.db.QueryRow(`SELECT id, total, done, cancelled, continuous, email_prefix, email_suffix FROM batch_registration WHERE cancelled = FALSE AND (done < total OR continuous = TRUE) ORDER BY id DESC LIMIT 1`)
 	var b batchState
-	if err := row.Scan(&b.ID, &b.Total, &b.Done, &b.Cancelled, &b.Continuous); err != nil {
+	if err := row.Scan(&b.ID, &b.Total, &b.Done, &b.Cancelled, &b.Continuous, &b.EmailPrefix, &b.EmailSuffix); err != nil {
 		return nil
 	}
 	return &b
@@ -332,11 +336,11 @@ func (s *server) resumeBatch() {
 	if b == nil {
 		return
 	}
-	log.Printf("resuming batch %d: done=%d total=%d continuous=%v", b.ID, b.Done, b.Total, b.Continuous)
-	s.startBatchLoop(b.ID, b.Total, b.Done, b.Continuous)
+	log.Printf("resuming batch %d: done=%d total=%d continuous=%v prefix=%q suffix=%q", b.ID, b.Done, b.Total, b.Continuous, b.EmailPrefix, b.EmailSuffix)
+	s.startBatchLoop(b.ID, b.Total, b.Done, b.Continuous, b.EmailPrefix, b.EmailSuffix)
 }
 
-func (s *server) startBatchLoop(batchID, total, startFrom int, continuous bool) {
+func (s *server) startBatchLoop(batchID, total, startFrom int, continuous bool, emailPrefix, emailSuffix string) {
 	s.mailboxRegisterMu.Lock()
 	if s.mailboxRegistering {
 		s.mailboxRegisterMu.Unlock()
@@ -369,7 +373,10 @@ func (s *server) startBatchLoop(batchID, total, startFrom int, continuous bool) 
 
 			start := time.Now()
 			ctx, cancel := context.WithTimeout(batchCtx, timeoutPerJob)
-			resp, err := s.orchestratorClient.RegisterMailbox(ctx, &pb.RegisterMailboxRequest{})
+			resp, err := s.orchestratorClient.RegisterMailbox(ctx, &pb.RegisterMailboxRequest{
+				EmailPrefix: emailPrefix,
+				EmailSuffix: emailSuffix,
+			})
 			cancel()
 			elapsed := time.Since(start)
 
@@ -451,18 +458,27 @@ func (s *server) handleMailboxRegister(w http.ResponseWriter, r *http.Request) {
 			remaining = total - done
 			continuous = b.Continuous
 		}
+		var emailPrefix, emailSuffix string
+		if b != nil {
+			emailPrefix = b.EmailPrefix
+			emailSuffix = b.EmailSuffix
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
-			"running":    running,
-			"total":      total,
-			"done":       done,
-			"remaining":  remaining,
-			"continuous": continuous,
+			"running":      running,
+			"total":        total,
+			"done":         done,
+			"remaining":    remaining,
+			"continuous":   continuous,
+			"email_prefix": emailPrefix,
+			"email_suffix": emailSuffix,
 		})
 	case http.MethodPost:
 		var body struct {
-			Count      int  `json:"count"`
-			Cancel     bool `json:"cancel"`
-			Continuous bool `json:"continuous"`
+			Count       int    `json:"count"`
+			Cancel      bool   `json:"cancel"`
+			Continuous  bool   `json:"continuous"`
+			EmailPrefix string `json:"email_prefix"`
+			EmailSuffix string `json:"email_suffix"`
 		}
 		_ = readJSON(r, &body)
 
@@ -503,19 +519,21 @@ func (s *server) handleMailboxRegister(w http.ResponseWriter, r *http.Request) {
 		s.db.Exec(`UPDATE batch_registration SET cancelled = TRUE WHERE cancelled = FALSE AND (done < total OR continuous = TRUE)`)
 		// insert new batch
 		var batchID int
-		err := s.db.QueryRow(`INSERT INTO batch_registration (total, done, continuous) VALUES ($1, 0, $2) RETURNING id`, count, continuous).Scan(&batchID)
+		err := s.db.QueryRow(`INSERT INTO batch_registration (total, done, continuous, email_prefix, email_suffix) VALUES ($1, 0, $2, $3, $4) RETURNING id`, count, continuous, body.EmailPrefix, body.EmailSuffix).Scan(&batchID)
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err)
 			return
 		}
 
-		s.startBatchLoop(batchID, count, 0, continuous)
+		s.startBatchLoop(batchID, count, 0, continuous, body.EmailPrefix, body.EmailSuffix)
 
 		writeJSON(w, http.StatusAccepted, map[string]any{
-			"started":    true,
-			"count":      count,
-			"continuous": continuous,
-			"batch_id":   batchID,
+			"started":      true,
+			"count":        count,
+			"continuous":   continuous,
+			"batch_id":     batchID,
+			"email_prefix": body.EmailPrefix,
+			"email_suffix": body.EmailSuffix,
 		})
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

@@ -373,6 +373,8 @@ func (s *orchestratorServer) RegisterMailboxAtomicActivity(ctx context.Context, 
 		resp, callErr := s.mailboxRegisterClient.RunMailboxRegistration(ctx, &pb.RunMailboxRegistrationRequest{
 			Enabled:    input.Enabled,
 			ImportOnly: input.ImportOnly,
+			EmailPrefix: input.EmailPrefix,
+			EmailSuffix: input.EmailSuffix,
 		})
 		data := map[string]any{
 			"enabled":        input.Enabled,

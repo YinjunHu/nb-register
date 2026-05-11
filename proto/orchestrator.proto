@@ -116,6 +116,8 @@ message GetJobResponse {
 
 message RegisterMailboxRequest {
   bool import_only = 1;
+  string email_prefix = 2;
+  string email_suffix = 3;
 }
 
 message RegisterMailboxResponse {

@@ -32,7 +32,11 @@ BOT_PROTECTION_WAIT = 11  # seconds
 # Data generators
 # ---------------------------------------------------------------------------
 
-def _gen_email_local() -> str:
+def _gen_email_local(prefix: str = "") -> str:
+    prefix = re.sub(r"[^a-z0-9]", "", prefix.lower().strip())
+    if prefix:
+        suffix = str(random.randint(100, 99999))
+        return (prefix + suffix)[:24]
     try:
         from faker import Faker
         fake = Faker("en_US")
@@ -541,6 +545,7 @@ def _handle_captcha(page, max_retries=3) -> bool:
 
 def outlook_register(
     proxy: str = "",
+    email_prefix: str = "",
     email_suffix: str = "@outlook.com",
     max_captcha_retries: int = 3,
     should_cancel_fn: Optional[Callable[[], bool]] = None,
@@ -548,7 +553,7 @@ def outlook_register(
     from camoufox.sync_api import Camoufox
     from browserforge.fingerprints import Screen
 
-    email_local = _gen_email_local()
+    email_local = _gen_email_local(prefix=email_prefix)
     full_email = email_local + email_suffix
     password = _gen_password()
     first_name, last_name = _gen_name()
@@ -770,12 +775,13 @@ def main():
 
     parser = argparse.ArgumentParser(description="Camoufox Outlook Registration")
     parser.add_argument("--proxy", default=os.environ.get("OUTLOOK_REGISTER_PROXY", ""), help="Proxy URL")
+    parser.add_argument("--prefix", default=os.environ.get("OUTLOOK_REGISTER_EMAIL_PREFIX", ""), help="Email local-part prefix")
     parser.add_argument("--suffix", default=os.environ.get("OUTLOOK_REGISTER_EMAIL_SUFFIX", "@outlook.com"), help="Email suffix")
     parser.add_argument("--max-retries", type=int, default=int(os.environ.get("OUTLOOK_REGISTER_MAX_CAPTCHA_RETRIES", "3")), help="Max CAPTCHA retries")
     parser.add_argument("--results-dir", default=os.environ.get("OUTLOOK_REGISTER_RESULTS_DIR", ""), help="Directory to output results")
     args = parser.parse_args()
 
-    result = outlook_register(proxy=args.proxy, email_suffix=args.suffix,
+    result = outlook_register(proxy=args.proxy, email_prefix=args.prefix, email_suffix=args.suffix,
                               max_captcha_retries=args.max_retries)
 
     print("\n" + "=" * 50)

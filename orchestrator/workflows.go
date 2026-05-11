@@ -257,7 +257,9 @@ func RegisterMailboxWorkflow(ctx workflow.Context, input RegisterMailboxWorkflow
 		JobID:  input.JobID,
 		Action: actionRegisterMailbox,
 		Params: map[string]string{
-			"import_only": boolString(input.ImportOnly),
+			"import_only":   boolString(input.ImportOnly),
+			"email_prefix":  input.EmailPrefix,
+			"email_suffix":  input.EmailSuffix,
 		},
 	}).Get(ctx, nil); err != nil {
 		result.ErrorMessage = err.Error()
@@ -266,9 +268,11 @@ func RegisterMailboxWorkflow(ctx workflow.Context, input RegisterMailboxWorkflow
 
 	var registration MailboxRegistrationActivityOutput
 	if err := workflow.ExecuteActivity(atomicCtx, registerMailboxActivityName, MailboxRegistrationActivityInput{
-		JobID:      input.JobID,
-		Enabled:    !input.ImportOnly,
-		ImportOnly: input.ImportOnly,
+		JobID:       input.JobID,
+		Enabled:     !input.ImportOnly,
+		ImportOnly:  input.ImportOnly,
+		EmailPrefix: input.EmailPrefix,
+		EmailSuffix: input.EmailSuffix,
 	}).Get(ctx, &registration); err != nil {
 		return failRegisterMailboxWorkflow(ctx, retryCtx, result, input.JobID, stepRegisterMailbox, statusFailedRetryable, false, true, err, registration.Data), nil
 	}
