@@ -554,8 +554,11 @@ function App() {
                     <button className="secondaryButton" onClick={() => runMailboxOAuth()} disabled={busy || !!mailboxOAuthing || missingOAuthCount === 0}>
                       <KeyRound size={16} /> 补 OAuth {missingOAuthCount > 0 ? `(${missingOAuthCount})` : ''}
                     </button>
-                    <button className="dangerButton" onClick={() => { const input = prompt('清理失败邮箱\n输入最低失败次数（0=全部删除，默认0）:', '0'); if (input === null) return; const n = Math.max(0, parseInt(input) || 0); if (!confirm(`确定删除所有 AUTH_FAILED/BLOCKED 邮箱${n > 0 ? `（失败≥${n}次）` : ''}？`)) return; bulkDeleteMailboxes('AUTH_FAILED', n); bulkDeleteMailboxes('BLOCKED', n); }} disabled={busy} title="删除失败邮箱，可设置最低失败次数">
-                      <Trash2 size={16} /> 清理失败邮箱
+                    <button className="dangerButton" onClick={() => { const input = prompt('清理注册失败邮箱\n输入最低失败次数（0=全部删除，默认0）:', '0'); if (input === null) return; const n = Math.max(0, parseInt(input) || 0); if (!confirm(`确定删除所有注册失败邮箱${n > 0 ? `（失败≥${n}次）` : ''}？`)) return; bulkDeleteMailboxes('REGISTRATION_FAILED', n); bulkDeleteMailboxes('USER_ALREADY_EXISTS', n); }} disabled={busy} title="删除注册阶段失败的邮箱">
+                      <Trash2 size={16} /> 清理注册失败
+                    </button>
+                    <button className="dangerButton" onClick={() => { const input = prompt('清理认证失败邮箱\n输入最低失败次数（0=全部删除，默认0）:', '0'); if (input === null) return; const n = Math.max(0, parseInt(input) || 0); if (!confirm(`确定删除所有认证失败邮箱${n > 0 ? `（失败≥${n}次）` : ''}？`)) return; bulkDeleteMailboxes('AUTH_FAILED', n); bulkDeleteMailboxes('BLOCKED', n); }} disabled={busy} title="删除OAuth认证阶段失败的邮箱">
+                      <Trash2 size={16} /> 清理认证失败
                     </button>
                     <button className="secondaryButton" onClick={() => setShowSecrets((v) => !v)}>
                       {showSecrets ? <EyeOff size={16} /> : <Eye size={16} />}
